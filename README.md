@@ -15,14 +15,17 @@ that read my own message.
 - **I talk to it like a person.** "Anything from the Chattanooga venue?", "Dana replied, she wants Tuesday",
   "find me chambers in Ohio". The assistant picks the right agent, does the work, and answers in a few lines
   ending with the one thing I should do next. It remembers our recent conversation and anything I tell it about how I work.
-- **It reaches out to me first.** Every morning it prospects, researches, pre-drafts and texts me what's ready:
+- **It reaches out to me first.** Every morning it finds up to 5 new organizers (`DAILY_LEADS` in `.env`), researches
+  them, pre-drafts and texts me what's ready:
   ```
-  Morning Aaron. 2 live on Pebble, 1 onboarding, 2 in conversation, 2 waiting on a reply.
-  Overnight I found 3 new prospects: Scenic City Market Hall (#17), ...; researched The Foundry Yards.
-  Drafts ready for you (`show <#>`, `ok <#>` to approve):
-  • #13 Lakeshore Pavilion (reply)
-  • #15 Riverlight Festivals (referral_ask)
-  • #17 Palmetto Pop-Up Markets (activation)
+  Morning Aaron. 2 orgs are live on Pebble and 1 is getting set up.
+
+  Here's what I'd do first:
+  • Jen at Lakeshore Pavilion said yes. Lock in a time while it's warm; I offered two (ok 13).
+  • Alex at Summit County Tourism Bureau asked what it costs, so I drafted a straight answer (ok 14).
+  • Palmetto Pop-Up Markets set up their first event 7 days ago and haven't opened vendor applications yet. I offered to do it for Rae (ok 17).
+
+  Also ready: a referral ask to Riverlight Festivals (ok 15), and a follow-up to Lucia at High Desert Events Co. (ok 18).
   ```
 - **Warm intros before cold email, double opt-in.** For a venue or chamber near a live customer, it drafts a note asking
   the customer whether that person is open to hearing from me. Only after the customer says yes does it draft the first

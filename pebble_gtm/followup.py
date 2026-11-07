@@ -16,6 +16,7 @@ missing an email to Clay, pre-drafts) and writes Aaron's morning WhatsApp. It on
 """
 
 import json
+import os
 from datetime import date, timedelta
 
 from . import db, llm, playbook, research, tracking
@@ -176,10 +177,15 @@ def run(conn, include_waiting=False):
     return sorted(out, key=lambda p: (ORDER[p["bucket"]], p["due"]))
 
 
-def morning(conn, prospect_limit=3, research_limit=4, draft_limit=6):
+# New organizers to add per day, from Instagram and the web together. Override with DAILY_LEADS in .env.
+DAILY_LEADS = 5
+
+
+def morning(conn, leads=None, research_limit=6, draft_limit=8):
     """The daily proactive pass. Does the work, then returns the WhatsApp message for Aaron."""
     from . import clay, draft, gmail, instagram, prospect
     use_web = llm.available()
+    leads = leads if leads is not None else int(os.environ.get("DAILY_LEADS", DAILY_LEADS))
     did = []
 
     if gmail.configured():                        # 1. catch up on replies first
@@ -195,7 +201,8 @@ def morning(conn, prospect_limit=3, research_limit=4, draft_limit=6):
             news = instagram.watch(conn)
             if news:
                 did.append("spotted fresh Instagram posts from " + ", ".join(n["org"] for n in news))
-            posts, added = instagram.discover(conn)
+            posts, added = instagram.discover(conn, limit=min(3, leads))
+            leads -= len(added)
             if added:
                 did.append(f"found {', '.join(n for _, n, _ in added)} through Instagram vendor calls")
             elif posts and not use_web:
@@ -203,9 +210,9 @@ def morning(conn, prospect_limit=3, research_limit=4, draft_limit=6):
         except Exception as e:
             did.append(f"couldn't reach Instagram ({type(e).__name__})")
 
-    if use_web:                                   # 3. find new orgs
+    if use_web and leads > 0:                     # 3. find new orgs, up to the daily total
         try:
-            added, _ = prospect.run(conn, limit=prospect_limit)
+            added, _ = prospect.run(conn, limit=leads)
             if added:
                 did.append("found " + ", ".join(n for _, n, _ in added))
         except Exception as e:
