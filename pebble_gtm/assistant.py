@@ -77,6 +77,9 @@ def _tools(conn):
         "Instagram now (known orgs' posts plus hashtag vendor calls).",
         {"org": {"type": "string"}, "handle": {"type": "string"}}, [],
         lambda org=None, handle=None: commands.cmd_ig(conn, f"{org} {handle}" if org and handle else ""))
+    add("email_report", "Build the PDF report (week's activity, what's waiting, every organizer with contact links and "
+        "where each detail came from) and email it to Aaron. days defaults to 7.",
+        {"days": {"type": "integer"}}, [], lambda days=7: commands.cmd_report(conn, str(days)))
     add("research", "Research one org and write its brief. web=true searches the web to fill gaps and find signals.",
         dict(org, web={"type": "boolean"}), ["org"],
         lambda org, web=True: commands.cmd_research(conn, f"{org} web" if web else org))

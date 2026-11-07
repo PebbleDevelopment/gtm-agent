@@ -82,7 +82,7 @@ python3 -m pebble_gtm today         # works with no API key (rules + templates)
 python3 -m pebble_gtm morning       # the daily pass
 python3 -m evals.run                # evals, pass/fail
 
-pip install -r requirements.txt     # anthropic, for the agentic parts
+pip install -r requirements.txt     # anthropic (agentic parts), reportlab (PDF report)
 export ANTHROPIC_API_KEY=...
 python3 -m pebble_gtm chat          # talk to it like WhatsApp
 python3 -m evals.run --llm          # also grade the live draft agent and the assistant's approval discipline
@@ -122,7 +122,7 @@ without you:
 2. Columns: find people at the company by `domain` filtered to `target_titles` (both sent by us), then email
    waterfall + verification. Keep `pebble_org_id` as a column so results can be matched back.
 3. Add an **HTTP API** column that POSTs to `https://<tunnel>/clay` with header `X-Clay-Secret: <your secret>` and body:
-   `{"pebble_org_id": …, "decision_maker": …, "decision_maker_title": …, "email": …, "email_status": "valid|risky|invalid", "linkedin_url": …}`
+   `{"pebble_org_id": …, "decision_maker": …, "decision_maker_title": …, "email": …, "email_status": "valid|risky|invalid", "phone": …, "linkedin_url": …}`
 4. Then:
 ```bash
 export CLAY_WEBHOOK_URL=...  CLAY_WEBHOOK_TOKEN=...  CLAY_CALLBACK_SECRET=...
@@ -182,6 +182,22 @@ skipped quietly). Hashtag search only sees the **last 24 hours** and **30 unique
 app's *Instagram Public Content Access* feature, which may need Meta's app review before it works on other people's posts.
 Watching known handles doesn't need it.
 
+## Weekly report (PDF, by email)
+
+Every Monday at 7am (`REPORT_DAY`, `REPORT_HOUR`; `off` to stop), or whenever you text `report` (or "send me the
+report for the last 30 days"), it emails you a PDF:
+
+- **The week:** who's live or setting up, new organizers found, notes sent, replies, and any first payments.
+- **Waiting on you:** drafts to approve, and approved notes not sent yet.
+- **Every organizer**, grouped (customers, in conversation, reached out, ready to contact, parked), with the decider,
+  email, phone, website and Instagram as links (mailto:, tel:, web), plus their latest news.
+- **Where each detail came from**, on the same line: *you*, *web research* or *prospect agent* (with a link to the page
+  it was on), *Clay*, *Instagram*, a *Gmail bounce*, or *sample data*. Every agent that writes a contact detail records
+  its source, so this is what actually happened, not a guess.
+
+It goes only to `GMAIL_ADDRESS`, through Gmail SMTP with the same app password; there is no way to send it to anyone
+else. A copy is saved in `reports/` (gitignored). Needs `pip install reportlab`.
+
 **Pebble milestones:** have Pebble call `POST /pebble` with `{"org": "<id or name>", "milestone": "first_payment"}` and
 header `X-Pebble-Secret: $PEBBLE_WEBHOOK_SECRET`. Until that's wired up, text `milestone palmetto apps_open`.
 
@@ -189,7 +205,7 @@ header `X-Pebble-Secret: $PEBBLE_WEBHOOK_SECRET`. Until that's wired up, text `m
 
 Plain language works for everything. These shortcuts are faster and free:
 
-`today` · `morning` · `pipeline` · `orgs` · `metrics` · `prospect [where]` · `enrich <org>` · `inbox` · `ig` · `ig <org> @handle` · `research <org> [web]` · `brief <org>` ·
+`today` · `morning` · `pipeline` · `orgs` · `metrics` · `report [days]` · `prospect [where]` · `enrich <org>` · `inbox` · `ig` · `ig <org> @handle` · `research <org> [web]` · `brief <org>` ·
 `draft <org> [force]` · `intro <org>` · `show <#>` · `ok <#>` · `edit <#> <text>` · `discard <#>` · `sent <#>` ·
 `replied <org> positive|neutral|negative [note]` · `milestone <org> signed_up|event_created|apps_open|first_payment` ·
 `meeting <org>` · `lost <org> [note]` · `signal <org> <kind> <detail>` · `add name | segment | city, ST | events/yr | flagship | decider | title`
@@ -214,6 +230,9 @@ Plain language works for everything. These shortcuts are faster and free:
   correctly; handles must be cleaned from links. Against a fake Graph API: a fresh vendor call must become the brief's
   why-now, old and ordinary posts must not, the same post must never be reported twice, the first note built on it must
   pass the draft checks, and the hashtag scan must keep only vendor calls.
+- **Report:** every contact detail must have a source and a link, sources must match who actually found them (Clay,
+  web research, Instagram), news must be worded for you, not the prospect, the PDF must contain working mailto:/tel:/
+  Instagram links, and it must email exactly one PDF, to you and nobody else.
 - **Voice:** pushback must be read as the right objection. Every pushback answer and revisit note must pass the draft
   checks. Every message I read (today, morning, drafts, approvals, reply notices) must be free of internal jargon, and the
   morning brief has a word limit. With `--llm`, a Claude grader also judges whether drafts and the morning brief sound
@@ -233,6 +252,7 @@ pebble_gtm/commands.py    shortcuts + routing        pebble_gtm/checks.py   qual
 pebble_gtm/whatsapp.py    Twilio webhook, morning push, inbox polling, /pebble and /clay webhooks
 pebble_gtm/clay.py        Clay enrichment round trip  pebble_gtm/gmail.py    read-only reply + send detection
 pebble_gtm/instagram.py   organizers' posts as signals, hashtag vendor calls as prospects
+pebble_gtm/report.py      the weekly PDF: pipeline, contact links, and where each detail came from
 pebble_gtm/playbook.py    personas, objections, voice: the GTM expertise every agent shares
 pebble_gtm/db.py          schema                     pebble_gtm/seed.py     synthetic sample data
 evals/cases.py, evals/run.py

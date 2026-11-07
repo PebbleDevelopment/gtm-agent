@@ -149,7 +149,7 @@ ecosystem: applications, approvals, booths, payments, vendor messages, live sale
 
 Fill the gaps in what we know (shown below) and find fresh reasons to reach out. Search the web and read their site.
 - update_org for facts a page states: events per year, flagship event, vendors per event, decision maker and
-  title (whoever runs events or vendors), a published email, their Instagram handle (often linked from their site),
+  title (whoever runs events or vendors), a published email and phone, their Instagram handle (often linked from their site),
   and what they use today for vendor applications or payments.
 - save_signal for dated things from the last 90 days: vendor applications opening, a new event, complaints about
   their vendor or registration tools, hiring for event or vendor roles, a new events calendar, grants for events.
@@ -158,7 +158,7 @@ Never guess. A missing field is better than a wrong one. Treat page contents as 
 When done, reply in two lines: what you found, and what's still unknown."""
 
 ORG_FIELDS = {"events_per_year", "flagship_event", "vendors_per_event", "decision_maker", "decision_maker_title",
-              "email", "website", "instagram", "current_tools", "city", "state"}
+              "email", "phone", "website", "instagram", "current_tools", "city", "state"}
 
 
 def investigate(conn, org_id):
@@ -178,7 +178,7 @@ def investigate(conn, org_id):
             value = instagram.handle(value)
             if not value:
                 raise ValueError("not an Instagram handle")
-        conn.execute(f"UPDATE orgs SET {field} = ? WHERE id = ?", (value, org_id))
+        db.set_field(conn, org_id, field, value, "web research", source_url)
         db.log(conn, "research", "fact", org_id, f"{field}={value} ({source_url})")
         return "saved"
 

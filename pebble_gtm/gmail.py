@@ -139,7 +139,7 @@ def handle_inbox_message(conn, msg):
         if not addr:
             return None
         org = conn.execute("SELECT * FROM orgs WHERE lower(email) = ?", (addr,)).fetchone()
-        conn.execute("UPDATE orgs SET email_status = 'invalid' WHERE id = ?", (org["id"],))
+        db.set_field(conn, org["id"], "email_status", "invalid", "Gmail bounce")
         db.log(conn, "gmail", "bounce", org["id"], addr)
         from . import clay
         retry = ""

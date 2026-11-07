@@ -4,6 +4,7 @@
   python -m pebble_gtm chat                 type commands as if on WhatsApp
   python -m pebble_gtm serve [--insecure]   run the WhatsApp webhook on :8787
   python -m pebble_gtm morning              run the daily proactive pass now (cron-friendly)
+  python -m pebble_gtm report [days]       build the PDF report and email it to you (saved under reports/ too)
   python -m pebble_gtm gmail test           check the Gmail login and folders without processing any mail
   python -m pebble_gtm <anything ...>       a shortcut (`today`, `draft 1`) or plain language
 """

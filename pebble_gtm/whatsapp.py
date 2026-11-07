@@ -195,6 +195,25 @@ def morning_loop():
         time.sleep(60)
 
 
+def report_loop():
+    """Email the PDF report once a week (REPORT_DAY at REPORT_HOUR, default Monday 7am) and tell Aaron on WhatsApp."""
+    day = os.environ.get("REPORT_DAY", "mon").lower()[:3]
+    if day == "off":
+        return
+    hour = int(os.environ.get("REPORT_HOUR", "7"))
+    last_day = None
+    while True:
+        now = datetime.now()
+        if now.strftime("%a").lower() == day and now.hour == hour and now.date() != last_day:
+            last_day = now.date()
+            try:
+                from . import report
+                push_to_aaron(report.run(db.connect()))
+            except Exception as e:
+                print(f"[report] failed: {e}")
+        time.sleep(60)
+
+
 def inbox_loop():
     if not gmail.configured():
         return
@@ -217,5 +236,6 @@ def serve(port=8787, insecure=False):
     Handler.insecure = insecure
     threading.Thread(target=morning_loop, daemon=True).start()
     threading.Thread(target=inbox_loop, daemon=True).start()
+    threading.Thread(target=report_loop, daemon=True).start()
     print(f"Listening on :{port}/whatsapp. Point your Twilio WhatsApp sandbox 'When a message comes in' here.")
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()

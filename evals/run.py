@@ -141,7 +141,7 @@ def instagram_rows():
     }
     real_get, real_profile = instagram._get, instagram.profile
     instagram._get = lambda path, **params: fake[path]
-    instagram.profile = lambda username: fake["6"]["business_discovery"]
+    instagram.profile = lambda username: fake["6"]["business_discovery"] if username == "sandhilledp" else {"media": {"data": []}}
     os.environ.update(IG_USER_ID="6", IG_ACCESS_TOKEN="test", IG_HASHTAGS="callforvendors")
     try:
         conn = _seeded()
@@ -180,6 +180,78 @@ def instagram_rows():
         instagram._get, instagram.profile = real_get, real_profile
         for k in ("IG_USER_ID", "IG_ACCESS_TOKEN", "IG_HASHTAGS"):
             os.environ.pop(k, None)
+    return rows
+
+
+def report_rows():
+    """The PDF report: every contact detail has a source and a link, and it only ever goes to Aaron."""
+    import email
+    import smtplib
+    import tempfile
+    from email.policy import default as policy
+    from evals.cases import JARGON
+    from pebble_gtm import clay, report
+    try:
+        import reportlab  # noqa: F401
+    except ImportError:
+        return [("report", "PDF report", ["reportlab not installed (pip install reportlab)"])]
+    rows = []
+    conn = _seeded()
+    clay.receive(conn, {"pebble_org_id": 2, "phone": "(251) 555-0133", "email_status": "valid",
+                        "linkedin_url": "https://www.linkedin.com/in/example"})
+    data = report.build(conn)
+    items = [(o["name"], c) for g in data["groups"] for o in g["orgs"] for c in o["contacts"]]
+    unsourced = [f"{n}: {c['label']}" for n, c in items if not c["source"]]
+    unlinked = [f"{n}: {c['label']}" for n, c in items if c["label"] != "Decides" and not c["link"]]
+    rows.append(("report", "every contact detail says where it came from", unsourced[:3]))
+    rows.append(("report", "every email, phone, site and handle is a link", unlinked[:3]))
+    want = {("Riverlight Festivals", "Instagram"): ("Instagram", "https://www.instagram.com/riverlightfest/"),
+            ("Gulf Coast Festival Productions", "Phone"): ("Clay", "tel:2515550133"),
+            ("Blue Ridge Makers Collective", "Phone"): ("web research", "tel:8285550142")}
+    got = {(n, c["label"]): (c["source"], c["link"]) for n, c in items}
+    rows.append(("report", "sources match who found each detail",
+                 [f"{k}: got {got.get(k)}, expected {v}" for k, v in want.items() if got.get(k) != v]))
+    news = [o["news"]["detail"] for g in data["groups"] for o in g["orgs"] if o["news"]]
+    rows.append(("report", "news reads to Aaron, not to the prospect",
+                 [d for d in map(report.third_person, news) if d.lower().startswith(("you ", "your "))][:2]))
+
+    path = report.pdf(data, os.path.join(tempfile.mkdtemp(), "r.pdf"))
+    raw = open(path, "rb").read()
+    rows.append(("report", "the PDF has working links",
+                 [] if raw.startswith(b"%PDF") and all(s in raw for s in (
+                     b"mailto:dana@blueridgemakers.example", b"tel:8285550142",
+                     b"https://www.instagram.com/riverlightfest/", b"blueridgemakers.example/contact"))
+                 else ["missing a mailto:, tel:, Instagram or source link"]))
+
+    sent = []
+
+    class FakeSMTP:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def login(self, user, pw): pass
+        def send_message(self, msg): sent.append(msg)
+
+    real, report.REPORTS_DIR = smtplib.SMTP_SSL, tempfile.mkdtemp()
+    smtplib.SMTP_SSL = FakeSMTP
+    os.environ.update(GMAIL_ADDRESS="aaron@pebbletheapp.com", GMAIL_APP_PASSWORD="test")
+    try:
+        reply = report.run(conn)
+    finally:
+        smtplib.SMTP_SSL = real
+        os.environ.pop("GMAIL_ADDRESS"), os.environ.pop("GMAIL_APP_PASSWORD")
+    problems = []
+    if len(sent) != 1:
+        problems.append(f"{len(sent)} emails sent")
+    else:
+        m = email.message_from_bytes(sent[0].as_bytes(), policy=policy)
+        if m["To"] != "aaron@pebbletheapp.com":
+            problems.append(f"went to {m['To']}")
+        if not any(p.get_content_type() == "application/pdf" for p in m.iter_attachments()):
+            problems.append("no PDF attached")
+    rows.append(("report", "it emails the PDF to Aaron and nobody else", problems))
+    rows.append(("report", "the WhatsApp line is plain",
+                 [w for w in JARGON if w in reply.lower()] + ([] if reply.startswith("Emailed you") else [reply[:60]])))
     return rows
 
 
@@ -284,6 +356,7 @@ def main(use_llm):
 
     rows += integration_rows()
     rows += instagram_rows()
+    rows += report_rows()
     rows += voice_rows()
     if use_llm:
         rows += live_agent_rows(today)

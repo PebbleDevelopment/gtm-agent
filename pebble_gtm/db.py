@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS orgs (
     email_status TEXT DEFAULT 'unknown',   -- unknown | valid | risky | invalid (from Clay or a bounce)
     website TEXT,
     instagram TEXT,                 -- handle without the @
+    phone TEXT,
     current_tools TEXT,
     source TEXT DEFAULT 'seed',     -- seed | aaron | prospect agent query that found it
     source_url TEXT,
@@ -101,6 +102,16 @@ CREATE TABLE IF NOT EXISTS conversation (
     text TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS facts (
+    id INTEGER PRIMARY KEY,         -- where each contact detail came from, newest last
+    org_id INTEGER NOT NULL REFERENCES orgs(id),
+    field TEXT NOT NULL,            -- decision_maker | email | phone | website | instagram | ...
+    value TEXT,
+    source TEXT NOT NULL,           -- you | web research | prospect agent | Clay | Instagram | Gmail bounce | sample data
+    url TEXT,                       -- the page that showed it, when there is one
+    at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS inbox_seen (
     message_id TEXT PRIMARY KEY,    -- Gmail messages already processed
     at TEXT NOT NULL
@@ -121,7 +132,7 @@ CREATE TABLE IF NOT EXISTS activity (
 );
 """
 
-TABLES = ["activity", "kv", "inbox_seen", "conversation", "memory", "milestones", "pipeline", "drafts", "briefs", "signals", "orgs"]
+TABLES = ["facts", "activity", "kv", "inbox_seen", "conversation", "memory", "milestones", "pipeline", "drafts", "briefs", "signals", "orgs"]
 
 
 def connect(path=None):
@@ -132,8 +143,9 @@ def connect(path=None):
     # Older stores predate these columns; add them in place.
     if "email_status" not in [r[1] for r in conn.execute("PRAGMA table_info(orgs)")]:
         conn.execute("ALTER TABLE orgs ADD COLUMN email_status TEXT DEFAULT 'unknown'")
-    if "instagram" not in [r[1] for r in conn.execute("PRAGMA table_info(orgs)")]:
-        conn.execute("ALTER TABLE orgs ADD COLUMN instagram TEXT")
+    for col in ("instagram", "phone"):
+        if col not in [r[1] for r in conn.execute("PRAGMA table_info(orgs)")]:
+            conn.execute(f"ALTER TABLE orgs ADD COLUMN {col} TEXT")
     if "rationale" not in [r[1] for r in conn.execute("PRAGMA table_info(drafts)")]:
         conn.execute("ALTER TABLE drafts ADD COLUMN rationale TEXT")
     return conn
@@ -171,13 +183,32 @@ def find_org(conn, ref):
 
 def add_org(conn, fields, source, source_url=None, synthetic=0):
     cols = ["name", "segment", "city", "state", "events_per_year", "flagship_event", "vendors_per_event",
-            "decision_maker", "decision_maker_title", "email", "website", "instagram", "current_tools"]
+            "decision_maker", "decision_maker_title", "email", "phone", "website", "instagram", "current_tools"]
     vals = [fields.get(c) for c in cols]
     org_id = conn.execute(
         f"INSERT INTO orgs ({', '.join(cols)}, source, source_url, synthetic) VALUES ({', '.join('?' * len(cols))}, ?, ?, ?)",
         vals + [source, source_url, synthetic]).lastrowid
     conn.execute("INSERT INTO pipeline (org_id, stage) VALUES (?, 'new')", (org_id,))
+    label = "you" if source == "aaron" else "prospect agent" if source.startswith("prospect") else source
+    for f in CONTACT_FIELDS:
+        if fields.get(f):
+            record(conn, org_id, f, fields[f], label, source_url)
     return org_id
+
+
+# Details the weekly report links to, each with where it came from (the facts table).
+CONTACT_FIELDS = ("decision_maker", "decision_maker_title", "email", "phone", "website", "instagram")
+
+
+def record(conn, org_id, field, value, source, url=None):
+    conn.execute("INSERT INTO facts (org_id, field, value, source, url, at) VALUES (?,?,?,?,?,?)",
+                 (org_id, field, value, source, url, now()))
+
+
+def set_field(conn, org_id, field, value, source, url=None):
+    """Change one org field and remember where the new value came from."""
+    conn.execute(f"UPDATE orgs SET {field} = ? WHERE id = ?", (value, org_id))
+    record(conn, org_id, field, value, source, url)
 
 
 def get_kv(conn, key, default=None):

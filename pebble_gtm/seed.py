@@ -92,6 +92,15 @@ HISTORY = [
     (15, "Palmetto announced a holiday pop-up series.", [(1, 30, 27, "positive"), (2, 20, None, None)]),
 ]
 
+# Extra details as if found by each source: org index, field, value, source, url.
+EXTRA_CONTACTS = [
+    (0, "instagram", "blueridgemakers", "web research", "https://blueridgemakers.example/"),
+    (0, "phone", "(828) 555-0142", "web research", "https://blueridgemakers.example/contact"),
+    (2, "phone", "(423) 555-0190", "Clay", None),
+    (5, "instagram", "sandhilledp", "you", None),
+    (13, "instagram", "riverlightfest", "Instagram", "https://www.instagram.com/riverlightfest/"),
+]
+
 REPLY_NOTES = {
     "positive": "Yes, would love to see it. We're redoing our organizer packet for spring.",
     "neutral": "What does this cost for six events? We're a public bureau.",
@@ -139,6 +148,15 @@ def seed(conn, reset=True):
     for idx, ms in MILESTONES.items():
         for m, days in ms.items():
             conn.execute("INSERT INTO milestones (org_id, milestone, at) VALUES (?,?,?)", (ids[idx], m, ago(days)))
+
+    # Where each contact detail "came from", so the weekly report has sources to show. All made up.
+    for org_id in ids:
+        org = conn.execute("SELECT * FROM orgs WHERE id = ?", (org_id,)).fetchone()
+        for f in db.CONTACT_FIELDS:
+            if org[f]:
+                db.record(conn, org_id, f, org[f], "sample data")
+    for idx, field, value, source, url in EXTRA_CONTACTS:
+        db.set_field(conn, ids[idx], field, value, source, url)
 
     # Prairie Fest went cold after three touches; a new signal has appeared since.
     conn.execute("UPDATE pipeline SET stage = 'cold' WHERE org_id = ?", (ids[9],))

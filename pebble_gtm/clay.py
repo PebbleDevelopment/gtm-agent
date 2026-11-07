@@ -67,7 +67,7 @@ def request(conn, org_id):
     row = {
         "pebble_org_id": org["id"], "name": org["name"], "domain": domain(org), "website": org["website"],
         "city": org["city"], "state": org["state"], "segment": org["segment"],
-        "known_decision_maker": org["decision_maker"], "known_title": org["decision_maker_title"],
+        "known_decision_maker": org["decision_maker"], "known_phone": org["phone"], "known_title": org["decision_maker_title"],
         "target_titles": ", ".join(TARGET_TITLES.get(org["segment"], [])),
     }
     headers = {"Content-Type": "application/json"}
@@ -90,6 +90,7 @@ def receive(conn, payload):
     email = (payload.get("email") or "").strip().lower() or None
     person = (payload.get("decision_maker") or "").strip() or None
     title = (payload.get("decision_maker_title") or "").strip() or None
+    phone = (payload.get("phone") or "").strip() or None
 
     changes = {}
     if person and not org["decision_maker"]:
@@ -102,10 +103,11 @@ def receive(conn, payload):
         changes["email"], changes["email_status"] = email, status
     elif email and email == org["email"]:
         changes["email_status"] = status
+    if phone and not org["phone"]:
+        changes["phone"] = phone
 
-    if changes:
-        sets = ", ".join(f"{k} = ?" for k in changes)
-        conn.execute(f"UPDATE orgs SET {sets} WHERE id = ?", (*changes.values(), org["id"]))
+    for field, value in changes.items():
+        db.set_field(conn, org["id"], field, value, "Clay", payload.get("linkedin_url"))
     db.log(conn, "clay", "result", org["id"], json.dumps({**changes, "linkedin": payload.get("linkedin_url")}))
     conn.commit()
 

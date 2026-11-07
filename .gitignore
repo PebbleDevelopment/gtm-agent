@@ -4,4 +4,5 @@ node_modules/
 .DS_Store
 __pycache__/
 *.db
+reports/
 !.env.example

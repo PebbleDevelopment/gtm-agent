@@ -43,6 +43,7 @@ TOOLS = [
         "flagship_event": {"type": "string"},
         "decision_maker": {"type": "string"}, "decision_maker_title": {"type": "string"},
         "email": {"type": "string", "description": "only if published on their site"},
+        "phone": {"type": "string", "description": "only if published on their site"},
         "why_icp": {"type": "string", "description": "one sentence: why this fits the ICP"},
         "source_url": {"type": "string"},
         "signal_date": {"type": "string", "description": "YYYY-MM-DD, if there's a dated reason to reach out"},
