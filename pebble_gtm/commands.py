@@ -21,6 +21,7 @@ If you want to be quick about it, these shortcuts skip straight to the action:
 *inbox*: check Gmail for replies and sends now
 *ig*: check Instagram now · *ig* <org> @handle: watch an org's posts
 *report* [days]: email you the PDF report now (it also comes every Monday)
+Send a *screenshot* of an organizer's site, event or profile and I'll add what I can read
 *research* <org> [web] · *brief* <org>
 *draft* <org> [force] · *intro* <org>: ask a live customer to introduce you
 *show* <#> · *ok* <#> (approve) · *edit* <#> <text> · *discard* <#>
@@ -185,6 +186,13 @@ def cmd_ig(conn, rest):
         out.append(f"Saw {len(posts)} new vendor call{'s' if len(posts) != 1 else ''} under the hashtags"
                    + (", but none were organizers that fit." if llm.available() else ". Working out who posted them needs Claude."))
     return "\n".join(out)
+
+
+def cmd_screenshot(conn, rest):
+    """From the terminal: screenshot <path> [caption]. On WhatsApp, just send the image."""
+    from . import screenshot
+    path, _, caption = rest.strip().partition(" ")
+    return screenshot.from_file(conn, path, caption)
 
 
 def cmd_report(conn, rest):
@@ -407,7 +415,7 @@ def cmd_metrics(conn, rest):
 
 HANDLERS = {
     "help": lambda c, r: HELP, "today": cmd_today, "next": cmd_today, "morning": cmd_morning,
-    "pipeline": cmd_pipeline, "orgs": cmd_orgs, "prospect": cmd_prospect, "enrich": cmd_enrich, "inbox": cmd_inbox, "ig": cmd_ig, "report": cmd_report, "research": cmd_research,
+    "pipeline": cmd_pipeline, "orgs": cmd_orgs, "prospect": cmd_prospect, "enrich": cmd_enrich, "inbox": cmd_inbox, "ig": cmd_ig, "report": cmd_report, "screenshot": cmd_screenshot, "research": cmd_research,
     "brief": cmd_brief, "draft": cmd_draft, "intro": cmd_intro, "show": cmd_show, "approve": cmd_approve,
     "edit": cmd_edit, "discard": cmd_discard, "sent": cmd_sent, "replied": cmd_replied, "milestone": cmd_milestone,
     "meeting": _manual_stage("meeting"), "lost": _manual_stage("lost"),

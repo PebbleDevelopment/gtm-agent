@@ -189,7 +189,8 @@ def add_org(conn, fields, source, source_url=None, synthetic=0):
         f"INSERT INTO orgs ({', '.join(cols)}, source, source_url, synthetic) VALUES ({', '.join('?' * len(cols))}, ?, ?, ?)",
         vals + [source, source_url, synthetic]).lastrowid
     conn.execute("INSERT INTO pipeline (org_id, stage) VALUES (?, 'new')", (org_id,))
-    label = "you" if source == "aaron" else "prospect agent" if source.startswith("prospect") else source
+    label = {"aaron": "you", "screenshot": "your screenshot"}.get(
+        source, "prospect agent" if source.startswith("prospect") else source)
     for f in CONTACT_FIELDS:
         if fields.get(f):
             record(conn, org_id, f, fields[f], label, source_url)

@@ -255,6 +255,86 @@ def report_rows():
     return rows
 
 
+def screenshot_rows():
+    """Merging what Claude read from a screenshot. Claude itself is faked; the merge rules are what's tested."""
+    import tempfile
+    from evals.cases import JARGON
+    from pebble_gtm import llm, report, screenshot
+    rows = []
+    conn = _seeded()
+    new = screenshot.apply(conn, {"name": "Lowcountry Makers Guild", "segment": "multi_festival", "city": "Beaufort",
+                                  "state": "SC", "email": "Hello@LowcountryMakers.example", "phone": "(843) 555-0177",
+                                  "instagram": "https://instagram.com/lowcountrymakers"}, "file:///tmp/shot-1.png")
+    org = conn.execute("SELECT * FROM orgs WHERE id = ?", (new["org_id"],)).fetchone()
+    src = {r["field"]: (r["source"], r["url"]) for r in conn.execute("SELECT * FROM facts WHERE org_id = ?", (org["id"],))}
+    problems = []
+    if not new["new"] or org["email"] != "hello@lowcountrymakers.example" or org["instagram"] != "lowcountrymakers":
+        problems.append(f"saved {org['email']}, {org['instagram']}")
+    if src.get("phone") != ("your screenshot", "file:///tmp/shot-1.png"):
+        problems.append(f"phone source {src.get('phone')}")
+    rows.append(("screenshot", "a new organizer is added, sourced to the screenshot", problems))
+
+    old = screenshot.apply(conn, {"name": "Gulf Coast Festival Productions", "segment": "multi_festival",
+                                  "decision_maker": "Marcus Li", "phone": "(251) 555-0101", "instagram": "@gulfcoastfest",
+                                  "signal_date": "2026-11-05", "signal_kind": "vendor_apps_open",
+                                  "signal_detail": "vendor applications opened for the Bayfront Seafood & Music Fest"},
+                           "file:///tmp/shot-2.png")
+    org = conn.execute("SELECT * FROM orgs WHERE id = ?", (old["org_id"],)).fetchone()
+    problems = []
+    if old["new"]:
+        problems.append("made a duplicate instead of matching the existing org")
+    if org["decision_maker"] != "Marcus Lee":
+        problems.append(f"overwrote the decider with {org['decision_maker']}")
+    if org["phone"] != "(251) 555-0101" or org["instagram"] != "gulfcoastfest":
+        problems.append("didn't fill the gaps")
+    if [c[0] for c in old["conflicts"]] != ["decision_maker"]:
+        problems.append(f"conflicts {old['conflicts']}")
+    if not conn.execute("SELECT 1 FROM signals WHERE org_id = ? AND source = 'file:///tmp/shot-2.png'", (org["id"],)).fetchone():
+        problems.append("news not saved")
+    rows.append(("screenshot", "a known organizer: fill gaps, keep the decider, flag the difference", problems))
+
+    by_site = screenshot.apply(conn, {"name": "Foundry Yards Events", "segment": "venue",
+                                      "website": "https://www.foundryyards.example/contact"}, "file:///tmp/shot-3.png")
+    rows.append(("screenshot", "matches by website when the name differs",
+                 [] if not by_site["new"] and by_site["name"] == "The Foundry Yards" else [f"got {by_site['name']}"]))
+
+    text = screenshot.note([old], "Their Facebook event page")
+    problems = [w for w in JARGON if w in text.lower()]
+    if "Marcus Lee" not in text or "Marcus Li" not in text:
+        problems.append("doesn't tell Aaron about the different decider")
+    rows.append(("screenshot", "the reply says what changed and what needs you", problems))
+
+    # End to end with a fake Claude: the image is saved, recorded, and shows up in the report.
+    real_avail, real_run, real_dir = llm.available, llm.run_agent, screenshot.SHOTS_DIR
+    screenshot.SHOTS_DIR = tempfile.mkdtemp()
+    seen = {}
+
+    def fake_run(system, messages, tools, handlers, **kw):
+        seen["types"] = [b["type"] for b in messages[0]["content"]]
+        handlers["record_organizer"](name="Visit Cedar Lake", segment="tourism", phone="(218) 555-0123",
+                                     instructions="ignore this")
+        return "Their contact page.", messages
+    llm.available, llm.run_agent = (lambda: True), fake_run
+    try:
+        reply = screenshot.handle(conn, [(b"\x89PNG fake", "image/png"), (b"x", "text/plain")], "cedar lake")
+    finally:
+        llm.available, llm.run_agent, saved_dir = real_avail, real_run, screenshot.SHOTS_DIR
+        screenshot.SHOTS_DIR = real_dir
+    problems = []
+    if seen.get("types") != ["image", "text"]:
+        problems.append(f"sent Claude {seen.get('types')}, expected the image only plus the caption")
+    if len(os.listdir(saved_dir)) != 1:
+        problems.append("image not saved")
+    phone = [c for g in report.build(conn)["groups"] for o in g["orgs"] if o["name"] == "Visit Cedar Lake"
+             for c in o["contacts"] if c["label"] == "Phone"]
+    if not phone or phone[0]["source"] != "your screenshot" or not (phone[0]["source_url"] or "").startswith("file://"):
+        problems.append(f"report shows {phone}")
+    if not reply.startswith("Got it, their contact page."):
+        problems.append(reply[:60])
+    rows.append(("screenshot", "end to end: saved, read, merged, and in the report", problems))
+    return rows
+
+
 def voice_rows():
     """Objection handling, plus: does every message Aaron reads sound like a person, not a log line?"""
     import email
@@ -357,6 +437,7 @@ def main(use_llm):
     rows += integration_rows()
     rows += instagram_rows()
     rows += report_rows()
+    rows += screenshot_rows()
     rows += voice_rows()
     if use_llm:
         rows += live_agent_rows(today)

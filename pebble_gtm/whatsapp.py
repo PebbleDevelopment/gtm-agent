@@ -95,6 +95,18 @@ def run_command(text):
         conn.close()
 
 
+def run_screenshots(media, caption):
+    """Aaron sent images: download them from Twilio and read them for organizer data."""
+    from . import screenshot
+    conn = db.connect()
+    try:
+        return screenshot.handle(conn, [(screenshot.fetch_twilio(url), t) for url, t in media], caption)
+    except Exception as e:
+        return f"Couldn't read that screenshot ({type(e).__name__}: {e})."
+    finally:
+        conn.close()
+
+
 class Handler(BaseHTTPRequestHandler):
     insecure = False
 
@@ -127,8 +139,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, twiml(""))      # ignore anyone who isn't Aaron, silently
 
         text = params.get("Body", "")
+        media = [(params[f"MediaUrl{i}"], params.get(f"MediaContentType{i}", ""))
+                 for i in range(int(params.get("NumMedia") or 0)) if params.get(f"MediaUrl{i}")]
+        job = (lambda: run_screenshots(media, text)) if media else (lambda: run_command(text))
         result = {}
-        worker = threading.Thread(target=lambda: result.update(reply=run_command(text)), daemon=True)
+        worker = threading.Thread(target=lambda: result.update(reply=job()), daemon=True)
         worker.start()
         worker.join(INLINE_SECONDS)
         if "reply" in result:

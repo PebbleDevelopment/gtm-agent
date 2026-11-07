@@ -109,8 +109,9 @@ def build(conn, days=7):
                 "what": f"{research.SEGMENT_LABEL.get(org['segment'], org['segment'])}, {org['city']}, {org['state']}",
                 "stage": STAGE_WORDS.get(org["stage"], org["stage"]), "next": org["next_action"],
                 "news": sig and {"detail": sig["detail"], "on": sig["seen_on"],
-                                 "url": sig["source"] if (sig["source"] or "").startswith("http") else None,
-                                 "where": sig["source"]},
+                                 "url": sig["source"] if (sig["source"] or "").startswith(("http", "file://")) else None,
+                                 "where": "your screenshot" if (sig["source"] or "").startswith("file://")
+                                 else sig["source"]},
                 "contacts": contacts(conn, org),
             })
         if orgs:
@@ -161,7 +162,9 @@ def _a(text, href):
 
 def _where(c):
     src = escape(c["source"])
-    if c["source_url"]:
+    if (c["source_url"] or "").startswith("file://"):
+        src += " · " + _a("open image", c["source_url"])
+    elif c["source_url"]:
         u = urlparse(c["source_url"] if "//" in c["source_url"] else f"https://{c['source_url']}")
         src += " · " + _a((u.netloc + u.path).rstrip("/"), c["source_url"])
     if c["on"]:

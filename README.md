@@ -182,6 +182,18 @@ skipped quietly). Hashtag search only sees the **last 24 hours** and **30 unique
 app's *Instagram Public Content Access* feature, which may need Meta's app review before it works on other people's posts.
 Watching known handles doesn't need it.
 
+## Screenshots: send what you find online
+
+See an organizer's contact page, a Facebook event, an Instagram profile or a vendor-call flyer? Screenshot it and send it
+to the WhatsApp chat, with a caption if it helps ("this is the chamber in Mobile"). Several images or a PDF work too.
+From the terminal: `python3 -m pebble_gtm screenshot ~/Desktop/shot.png this is the chamber in Mobile`.
+
+Claude reads it and records each organizer it can see; then the same rule as Clay applies. New organizers are added.
+Known ones only get gaps filled: it never overwrites a decider, email or phone you already have, and it tells you when the
+screenshot disagrees. Dated news in it (applications open, a new event) becomes a signal. Every detail is sourced to
+*your screenshot*, and the image is kept in `screenshots/` (gitignored) so the report can link to it. Text inside a
+screenshot is treated as data, never as instructions. Needs Claude.
+
 ## Weekly report (PDF, by email)
 
 Every Monday at 7am (`REPORT_DAY`, `REPORT_HOUR`; `off` to stop), or whenever you text `report` (or "send me the
@@ -233,6 +245,9 @@ Plain language works for everything. These shortcuts are faster and free:
 - **Report:** every contact detail must have a source and a link, sources must match who actually found them (Clay,
   web research, Instagram), news must be worded for you, not the prospect, the PDF must contain working mailto:/tel:/
   Instagram links, and it must email exactly one PDF, to you and nobody else.
+- **Screenshots:** a new organizer is added and sourced to the image; a known one gets gaps filled while its decider is
+  kept and the difference flagged; a different name with the same website still matches; end to end with a fake Claude,
+  the image is saved and its details show up in the report.
 - **Voice:** pushback must be read as the right objection. Every pushback answer and revisit note must pass the draft
   checks. Every message I read (today, morning, drafts, approvals, reply notices) must be free of internal jargon, and the
   morning brief has a word limit. With `--llm`, a Claude grader also judges whether drafts and the morning brief sound
@@ -252,6 +267,7 @@ pebble_gtm/commands.py    shortcuts + routing        pebble_gtm/checks.py   qual
 pebble_gtm/whatsapp.py    Twilio webhook, morning push, inbox polling, /pebble and /clay webhooks
 pebble_gtm/clay.py        Clay enrichment round trip  pebble_gtm/gmail.py    read-only reply + send detection
 pebble_gtm/instagram.py   organizers' posts as signals, hashtag vendor calls as prospects
+pebble_gtm/screenshot.py  organizer data read from screenshots you send
 pebble_gtm/report.py      the weekly PDF: pipeline, contact links, and where each detail came from
 pebble_gtm/playbook.py    personas, objections, voice: the GTM expertise every agent shares
 pebble_gtm/db.py          schema                     pebble_gtm/seed.py     synthetic sample data
