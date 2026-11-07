@@ -177,6 +177,15 @@ def reply_note(conn, org, kind, snippet, thread_org):
     from . import commands, draft
     name = playbook.who(org)
     objection = playbook.detect_objection(snippet)
+    # A follow-up written before they replied is now wrong. Withdraw it, and warn Aaron if he'd already approved it.
+    stale = conn.execute("""SELECT id, status FROM drafts WHERE org_id = ? AND via_org_id IS NULL
+                            AND purpose = 'outreach' AND status IN ('draft', 'approved')""", (thread_org,)).fetchall()
+    for s in stale:
+        conn.execute("UPDATE drafts SET status = 'discarded' WHERE id = ?", (s["id"],))
+        db.log(conn, "gmail", "withdraw", thread_org, f"#{s['id']} (they replied)")
+    pulled = [s["id"] for s in stale if s["status"] == "approved"]
+    pulled = (f"\n\nI pulled the follow-up you'd approved (#{', #'.join(map(str, pulled))}) since they've written back, "
+              "so don't send it.") if pulled else ""
     about = "" if thread_org == org["id"] else f" about the intro to {db.find_org(conn, thread_org)['name']}"
     if kind == "positive":
         head = f"{name} wrote back{about}, and it's a yes: \"{snippet}\""
@@ -188,9 +197,9 @@ def reply_note(conn, org, kind, snippet, thread_org):
         rule = playbook.OBJECTIONS.get(objection or "", {})
         later = (f" Sounds like 'not now' rather than 'no', so I'll bring it back in about {rule['revisit_days']} days."
                  if rule.get("revisit_days") and objection in ("timing", "existing_tool") else " I'll close it out.")
-        return f"{name} passed{about}: \"{snippet}\".{later}"
+        return f"{name} passed{about}: \"{snippet}\".{later}{pulled}"
     d, _ = draft.run(conn, thread_org)
-    return head + ("\n\n" + commands._show_new(d) if d else "")
+    return head + ("\n\n" + commands._show_new(d) if d else "") + pulled
 
 
 def match_sent(conn, msg):

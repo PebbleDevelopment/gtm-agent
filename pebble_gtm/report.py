@@ -11,7 +11,6 @@ Needs reportlab (pip install reportlab). Env: REPORT_DAY (mon..sun, or off), REP
 """
 
 import os
-import re
 import smtplib
 from datetime import timedelta
 from email.message import EmailMessage
@@ -121,13 +120,6 @@ def build(conn, days=7):
             "synthetic": conn.execute("SELECT COUNT(*) FROM orgs WHERE synthetic = 1").fetchone()[0]}
 
 
-def third_person(detail):
-    """Signals are written to the prospect ("your post about..."); the report is for Aaron ("Their post about...")."""
-    d = re.sub(r"^your\b", "their", detail.strip(), flags=re.IGNORECASE)
-    d = re.sub(r"^you\b", "they", d, flags=re.IGNORECASE)
-    return d[:1].upper() + d[1:]
-
-
 def summary(data):
     """A few sentences in Aaron's terms. Used as the email body and the WhatsApp reply."""
     w, n = data["week"], data["stages"]
@@ -219,7 +211,7 @@ def pdf(data, path):
             if o["news"]:
                 n = o["news"]
                 where = _a(n["where"], n["url"]) if n["url"] else escape(n["where"] or "")
-                rows.append([Paragraph("Latest news", small), Paragraph(escape(third_person(n["detail"])), body),
+                rows.append([Paragraph("Latest news", small), Paragraph(escape(playbook.third_person(n["detail"])), body),
                              Paragraph(f"{where} · {n['on']}", small)])
             if rows:
                 t = Table(rows, colWidths=[0.9 * inch, 3.3 * inch, 2.8 * inch])

@@ -1,5 +1,6 @@
 """Entry point.
 
+  python -m pebble_gtm demo                 a day with the agent in two minutes, offline, no keys needed
   python -m pebble_gtm seed                 reset the store with synthetic sample data
   python -m pebble_gtm chat                 type commands as if on WhatsApp
   python -m pebble_gtm serve [--insecure]   run the WhatsApp webhook on :8787
@@ -35,6 +36,9 @@ def main(argv):
     if not argv:
         print(__doc__)
         return
+    if argv[0] == "demo":
+        from . import demo
+        sys.exit(1 if demo.run() else 0)
     if argv[0] == "seed":
         conn = db.connect()
         ids = seed.seed(conn)

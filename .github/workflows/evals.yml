@@ -1,0 +1,26 @@
+name: evals
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    env:
+      PEBBLE_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install reportlab
+      - name: Evals
+        run: python -m evals.run
+      - name: Demo (a day with the agent, offline)
+        run: python -m pebble_gtm demo
+      - name: Keep the demo's PDF report
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-report
+          path: reports/pebble-report-demo.pdf

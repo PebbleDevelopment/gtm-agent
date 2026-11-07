@@ -239,7 +239,7 @@ def _show_new(d, note=None):
     kind = playbook.PURPOSE_WORDS.get(d["purpose"], "note")
     why = f"\n_{d['rationale']}_" if d.get("rationale") else ""
     article = "an" if kind[0] in "aeiou" else "a"
-    return (f"Here's {article} {kind} for {d['to']}.{why}\n\n{d['body']}\n\n{_email_note(d.get('email'), d.get('email_status'))} "
+    return (f"Here's {article} {kind} for {d['to'].rstrip('.')}.{why}\n\n{d['body']}\n\n{_email_note(d.get('email'), d.get('email_status'))} "
             f"*ok {d['id']}* to approve, or *edit {d['id']}* with your version.")
 
 

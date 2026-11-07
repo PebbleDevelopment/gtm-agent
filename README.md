@@ -1,14 +1,65 @@
 # Pebble GTM agent
 
-An agent I text on WhatsApp that finds the organizations that should run their vendor events on Pebble, gets
-me in front of them, and keeps pushing until they're **live**, meaning their first vendor payment has gone through Pebble.
+[![evals](https://github.com/PebbleDevelopment/gtm-agent/actions/workflows/evals.yml/badge.svg)](https://github.com/PebbleDevelopment/gtm-agent/actions/workflows/evals.yml)
+
+A go-to-market agent for [Pebble](https://pebbletheapp.com), the AI platform that runs a festival's or market's vendor
+operations. I text it on WhatsApp. It finds organizers who should be on Pebble, researches them, writes outreach in my
+voice, reads the replies, and keeps going after signup until they're **live**: their first vendor payment collected
+through Pebble. Founder-led sales, with the busywork taken out and the judgment left in.
 
 The ICP is organizers who produce several festivals or markets a year, venues that host several organizers, and tourism
 bureaus, chambers and economic-development groups that run vendor events.
 
-**It never sends anything to anyone except me.** Agents write drafts. I approve with `ok 14`, copy the text, send it
-myself, and text `sent 14`. No agent has a tool that can approve or send. Those two steps exist only as shortcuts
-that read my own message.
+## Try it in two minutes (no accounts or keys)
+
+```bash
+git clone https://github.com/PebbleDevelopment/gtm-agent && cd gtm-agent
+pip install reportlab                # optional, for the PDF report
+python3 -m pebble_gtm demo
+```
+
+It plays through a day on sample data, running the real code against a throwaway database: the morning message, a draft
+approved, the send noticed in Gmail, a vendor call spotted on Instagram and turned into a first note, a yes and a
+pushback answered, a screenshot turned into a new lead, the weekly PDF report, the metrics, and the evals. Outside
+services are stood in, and nothing leaves the machine. Then `python3 -m pebble_gtm chat` lets you poke at it yourself.
+
+```mermaid
+flowchart LR
+    you(["You, on WhatsApp"]) <--> asst["Assistant<br/>(Claude + tools)"]
+    asst --> prospect["Prospect"] & research["Research"] & draft["Draft"]
+    followup["Follow-up<br/>(morning pass)"] -->|8am message| you
+    followup --> prospect & research & draft
+    web["Web search"] & ig["Instagram"] & shots["Your screenshots"] & clay["Clay"] --> research & prospect
+    draft -->|draft + why| gate{"your ok N"}
+    gate -->|you send it| gmail["Gmail"]
+    gmail -->|replies, sends, bounces| tracking["Tracking<br/>new → live"]
+    pebble["Pebble milestones"] --> tracking
+    tracking --> store[("SQLite: orgs, signals,<br/>drafts, sources")]
+    store --> report["Weekly PDF<br/>emailed to you"]
+```
+
+## Why it's built this way
+
+- **Nothing goes to a prospect without me.** Agents write drafts. No agent has a tool that can approve or send. Approval
+  is a shortcut that only reads my own message (`ok 14`), and I send from my own Gmail, which it watches to log the send.
+  The only email it ever sends itself is the weekly report, to me. An eval pushes the assistant to "just send it" and
+  fails if any draft changes status.
+- **Five leads a day, on purpose.** One founder can write to and follow up with 15–25 well-researched organizers a week.
+  Fifty a day means generic notes and a burned domain. It's a single setting (`DAILY_LEADS`) when there's a team.
+- **A reason to write, or no message.** Research picks one dated trigger (applications just opened, a new event, a hiring
+  post). If nothing is fresh, the brief says HOLD and nothing is drafted. Warm intros through live customers come before
+  cold email.
+- **Every contact detail has a source.** Each email, phone and handle records where it came from (web research with the
+  page, Clay, Instagram, a screenshot, me), and the report shows it next to the link.
+- **Claude does the open-ended work, rules do the rest.** Prospecting, research, writing and reading screenshots use
+  Claude. Stages, priorities, merges and the approval gate are plain code, so they're predictable and testable. Without
+  an API key, everything except the Claude parts still runs on rules and templates.
+- **Evals gate the output.** 100 checks: briefs, every message type, a grader self-test with known-bad drafts, Gmail
+  edge cases, Instagram captions, report sources, and a jargon check on every message I read. The draft agent runs the
+  same checks on itself before saving. CI runs the evals and the demo on every push.
+
+**Status:** built and tested end to end offline, with the outside services stood in. Not yet run against live Claude,
+Gmail, Twilio or Instagram accounts. The numbers in the demo come from sample data, not real outreach.
 
 ## How it works (the Boardy idea)
 
@@ -38,18 +89,8 @@ that read my own message.
 - **It thinks like a GTM lead and talks like one** (`playbook.py`). It knows who each buyer is and what moves them, how
   to read pushback (a contract means ask when it renews, "the board" means arm your champion, a price question means
   interest), and that "not now" is a date to come back. Every draft comes with one line on why it's written that way.
-  Messages to me lead with what matters and what it would do, using people's names and no internal labels:
-  ```
-  Morning Aaron. 2 orgs are live on Pebble and 1 is getting set up.
-
-  Here's what I'd do first:
-  • Jen at Lakeshore Pavilion said yes. Lock in a time while it's warm; I offered two (ok 13).
-  • Alex at Summit County Tourism Bureau asked what it costs, so I drafted a straight answer (ok 14).
-  • Palmetto Pop-Up Markets set up their first event 7 days ago and haven't opened vendor applications yet. I offered to do it for Rae (ok 17).
-
-  Also ready: a referral ask to Riverlight Festivals (ok 15), a referral ask to Buckeye Night Markets (ok 16), and a follow-up to Lucia at High Desert Events Co. (ok 18).
-  ```
-  When a reply lands in Gmail, the answer is already drafted: "Carl at Old Town wrote back, and it's a yes…"
+  Messages to me lead with what matters and what it would do, using people's names and no internal labels (see the
+  morning message above). When a reply lands in Gmail, the answer is already drafted: "Carl at Old Town wrote back, and it's a yes…"
 
 ```
 WhatsApp ─Twilio─▶ whatsapp.py ─▶ commands.py ──shortcuts (ok/sent/today...)──────────┐
@@ -77,6 +118,7 @@ understand how they all work.
 ## Run it
 
 ```bash
+python3 -m pebble_gtm demo          # the guided day, offline
 python3 -m pebble_gtm seed          # 16 synthetic orgs: 2 live customers, 1 stalled in onboarding, outreach history
 python3 -m pebble_gtm today         # works with no API key (rules + templates)
 python3 -m pebble_gtm morning       # the daily pass
@@ -267,6 +309,7 @@ pebble_gtm/commands.py    shortcuts + routing        pebble_gtm/checks.py   qual
 pebble_gtm/whatsapp.py    Twilio webhook, morning push, inbox polling, /pebble and /clay webhooks
 pebble_gtm/clay.py        Clay enrichment round trip  pebble_gtm/gmail.py    read-only reply + send detection
 pebble_gtm/instagram.py   organizers' posts as signals, hashtag vendor calls as prospects
+pebble_gtm/demo.py        the two-minute offline demo
 pebble_gtm/screenshot.py  organizer data read from screenshots you send
 pebble_gtm/report.py      the weekly PDF: pipeline, contact links, and where each detail came from
 pebble_gtm/playbook.py    personas, objections, voice: the GTM expertise every agent shares

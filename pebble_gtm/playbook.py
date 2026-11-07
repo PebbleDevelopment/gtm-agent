@@ -5,6 +5,8 @@ This is the "expert" part. The agents' prompts quote it, the rules-based fallbac
 directly, and changing a line here changes how the whole system thinks.
 """
 
+import re
+
 # Who each segment is, what they care about, and what to lead with.
 PERSONAS = {
     "multi_festival": {
@@ -134,6 +136,13 @@ def who(org):
     return f"{first(org['decision_maker'])} at {org['name']}" if org["decision_maker"] else org["name"]
 
 
+def third_person(detail):
+    """Signals are written to the prospect ("your post about..."); notes to Aaron say "their post about..."."""
+    d = re.sub(r"^your\b", "their", detail.strip(), flags=re.IGNORECASE)
+    d = re.sub(r"^you\b", "they", d, flags=re.IGNORECASE)
+    return d[:1].upper() + d[1:]
+
+
 def angle(org, purpose, trigger=None, objection=None, intro_from=None, touch=1):
     """One line on why a draft is written the way it is. Shown to Aaron with every draft."""
     p = persona(org["segment"])
@@ -153,5 +162,6 @@ def angle(org, purpose, trigger=None, objection=None, intro_from=None, touch=1):
         return "Second touch adds something new and lowers the ask to a free setup they can compare side by side."
     if touch >= 3:
         return "Last touch. A graceful close-out often gets the reply the first two didn't, and leaves the door open."
-    lead = f"Opens on their own news ({trigger['detail']})" if trigger else "No strong trigger"
+    news = third_person(trigger["detail"]) if trigger else ""
+    lead = f"Opens on their own news ({news[:1].lower() + news[1:]})" if trigger else "No strong trigger"
     return f"{lead}, then speaks to what {p['who'].split(' who')[0].split(',')[0]} cares about: {p['lead_with']}."

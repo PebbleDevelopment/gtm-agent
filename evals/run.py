@@ -87,6 +87,18 @@ def integration_rows():
         rows.append(("gmail", name, problems))
 
     conn = _seeded()
+    from pebble_gtm import draft
+    d, _ = draft.run(conn, 7, use_llm=False)            # this morning's follow-up to Lucia, approved but not sent
+    conn.execute("UPDATE drafts SET status = 'approved' WHERE id = ?", (d["id"],))
+    raw = next(r for n, r, _ in INBOX_CASES if n == "clear yes with a question")
+    note = gmail.handle_inbox_message(conn, email.message_from_string(raw, policy=policy))
+    st = conn.execute("SELECT status FROM drafts WHERE id = ?", (d["id"],)).fetchone()[0]
+    answer = conn.execute("SELECT id FROM drafts WHERE org_id = 7 AND purpose = 'reply' AND status = 'draft'").fetchone()
+    rows.append(("gmail", "a reply withdraws the follow-up written before it, and answers instead",
+                 ([] if st == "discarded" else [f"old follow-up is {st}"]) + ([] if answer else ["no answer drafted"])
+                 + ([] if f"#{d['id']}" in (note or "") and "don't send it" in (note or "") else ["didn't warn Aaron"])))
+
+    conn = _seeded()
     conn.execute("UPDATE drafts SET status = 'approved', approved_at = '2026-11-06T09:00:00' WHERE id = "
                  "(SELECT MAX(id) FROM drafts WHERE org_id = 7)")
     sent = email.message_from_string("From: aaron@pebbletheapp.com\nTo: Lucia <lucia@highdesertevents.example>\n"
@@ -190,11 +202,12 @@ def report_rows():
     import tempfile
     from email.policy import default as policy
     from evals.cases import JARGON
-    from pebble_gtm import clay, report
+    from pebble_gtm import clay, playbook, report
     try:
         import reportlab  # noqa: F401
     except ImportError:
-        return [("report", "PDF report", ["reportlab not installed (pip install reportlab)"])]
+        print("(Skipping the 7 PDF report checks: pip install reportlab to run them.)")
+        return []
     rows = []
     conn = _seeded()
     clay.receive(conn, {"pebble_org_id": 2, "phone": "(251) 555-0133", "email_status": "valid",
@@ -213,7 +226,7 @@ def report_rows():
                  [f"{k}: got {got.get(k)}, expected {v}" for k, v in want.items() if got.get(k) != v]))
     news = [o["news"]["detail"] for g in data["groups"] for o in g["orgs"] if o["news"]]
     rows.append(("report", "news reads to Aaron, not to the prospect",
-                 [d for d in map(report.third_person, news) if d.lower().startswith(("you ", "your "))][:2]))
+                 [d for d in map(playbook.third_person, news) if d.lower().startswith(("you ", "your "))][:2]))
 
     path = report.pdf(data, os.path.join(tempfile.mkdtemp(), "r.pdf"))
     raw = open(path, "rb").read()
