@@ -107,6 +107,142 @@ def integration_rows():
     return rows
 
 
+def instagram_rows():
+    """Reading posts, and the watch/discover passes against a fake Graph API (no network)."""
+    from evals.cases import IG_HANDLE_CASES, IG_POST_CASES
+    from pebble_gtm import checks, commands, draft, instagram, research
+    rows = []
+    for name, caption, expect in IG_POST_CASES:
+        got = instagram.read_post(caption)
+        kind = got and got[0]
+        problems = [] if kind == expect else [f"read as {kind}, expected {expect}"]
+        if got and ("#" in got[1] or "🎄" in got[1]):
+            problems.append(f"hashtags or emoji leaked into the detail: {got[1]}")
+        rows.append(("instagram", name, problems))
+    for raw, expect in IG_HANDLE_CASES:
+        got = instagram.handle(raw)
+        rows.append(("instagram", f"handle {raw!r}", [] if got == expect else [f"got {got!r}"]))
+
+    sandhill_post = {"caption": "📣 Calling all vendors! Applications for Sandhill Small Business Saturday are open now. "
+                                "#shopsmall #callforvendors",
+                     "timestamp": "2026-11-04T14:00:00+0000", "permalink": "https://www.instagram.com/p/SANDHILL1/"}
+    fake = {
+        "6": {"business_discovery": {"media": {"data": [
+            sandhill_post,
+            {"caption": "Thanks for a great season!", "timestamp": "2026-11-01T14:00:00+0000",
+             "permalink": "https://www.instagram.com/p/SANDHILL0/"},
+            {"caption": "Vendor applications are open for spring!", "timestamp": "2026-06-01T14:00:00+0000",
+             "permalink": "https://www.instagram.com/p/OLD/"}]}}},
+        "ig_hashtag_search": {"data": [{"id": "h1"}]},
+        "h1/recent_media": {"data": [
+            {"caption": "Now accepting vendors for the Lowcountry Holiday Market! DM us.", "timestamp": "2026-11-06T09:00:00+0000",
+             "permalink": "https://www.instagram.com/p/LEAD1/"},
+            {"caption": "Look at this cake", "timestamp": "2026-11-06T09:00:00+0000", "permalink": "https://www.instagram.com/p/CAKE/"}]},
+    }
+    real_get, real_profile = instagram._get, instagram.profile
+    instagram._get = lambda path, **params: fake[path]
+    instagram.profile = lambda username: fake["6"]["business_discovery"]
+    os.environ.update(IG_USER_ID="6", IG_ACCESS_TOKEN="test", IG_HASHTAGS="callforvendors")
+    try:
+        conn = _seeded()
+        commands.dispatch(conn, "ig sandhill @SandhillEDP")
+        org = conn.execute("SELECT * FROM orgs WHERE id = 6").fetchone()
+        rows.append(("instagram", "ig command saves the handle",
+                     [] if org["instagram"] == "sandhilledp" else [f"saved {org['instagram']!r}"]))
+        before = research.latest_brief(conn, 6)
+        news = instagram.watch(conn)
+        again = instagram.watch(conn)
+        saved = conn.execute("SELECT * FROM signals WHERE org_id = 6 AND source LIKE '%instagram%'").fetchall()
+        brief = research.latest_brief(conn, 6)
+        problems = []
+        if [s["source"] for s in saved] != [sandhill_post["permalink"]]:
+            problems.append(f"saved {[s['source'] for s in saved]}, expected only the fresh vendor call")
+        if again:
+            problems.append("the same post was reported twice")
+        if not brief or not brief["why_now"] or (before and before["why_now"]):
+            problems.append("the brief didn't pick up the post as its reason to reach out")
+        rows.append(("instagram", "watch turns a fresh vendor call into the reason to write", problems))
+        note = news[0]["note"] if news else ""
+        rows.append(("instagram", "the note to Aaron is plain and names Rob",
+                     [] if note.startswith("Rob at Sandhill") and "vendor_apps_open" not in note else [note[:80]]))
+        d, _ = draft.run(conn, 6, use_llm=False)
+        org = conn.execute("SELECT * FROM orgs WHERE id = 6").fetchone()
+        problems = checks.draft_problems(d["body"], org, brief["body"]) if d else ["no draft"]
+        if d and "Instagram" not in d["body"]:
+            problems.append("draft doesn't mention the post")
+        rows.append(("instagram", "the first note built on the post passes the draft checks", problems))
+
+        found = instagram.leads(conn)
+        rows.append(("instagram", "hashtag scan keeps only vendor calls, once",
+                     [] if [p["link"] for p in found] == ["https://www.instagram.com/p/LEAD1/"] and not instagram.leads(conn)
+                     else [f"got {[p['link'] for p in found]}"]))
+    finally:
+        instagram._get, instagram.profile = real_get, real_profile
+        for k in ("IG_USER_ID", "IG_ACCESS_TOKEN", "IG_HASHTAGS"):
+            os.environ.pop(k, None)
+    return rows
+
+
+def voice_rows():
+    """Objection handling, plus: does every message Aaron reads sound like a person, not a log line?"""
+    import email
+    from email.policy import default as policy
+    from evals.cases import BRIEF_CASES, INBOX_CASES, JARGON, OBJECTION_CASES
+    from pebble_gtm import commands, gmail, playbook
+    rows = []
+    for text, expect in OBJECTION_CASES:
+        got = playbook.detect_objection(text)
+        rows.append(("objection", f'"{text[:40]}"', [] if got == expect else [f"read as {got}, expected {expect}"]))
+
+    org = BRIEF_CASES[0]["org"]
+    for key in ("existing_tool", "timing", "not_decider", "how_it_works"):
+        rows.append(("pushback reply", key, checks.draft_problems(draft.compose_objection(org, key), org, "")))
+    for key in ("existing_tool", "timing"):
+        rows.append(("revisit", key, checks.draft_problems(draft.compose_revisit(org, key), org, "")))
+
+    conn = _seeded()
+    said = {
+        "today": commands.dispatch(conn, "today"),
+        "morning": commands.dispatch(conn, "morning"),
+        "draft (venue)": commands.dispatch(conn, "research foundry") and commands.dispatch(conn, "intro foundry"),
+    }
+    first_id = conn.execute("SELECT MIN(id) FROM drafts WHERE status = 'draft'").fetchone()[0]
+    said["show"] = commands.dispatch(conn, f"show {first_id}")
+    said["approve"] = commands.dispatch(conn, f"ok {first_id}")
+    said["sent"] = commands.dispatch(conn, f"sent {first_id}")
+    said["reply notice"] = gmail.handle_inbox_message(conn, email.message_from_string(INBOX_CASES[0][1], policy=policy)) or ""
+    for name, text in said.items():
+        hits = [j for j in JARGON if j in text.lower()]
+        problems = [f"internal words reach Aaron: {', '.join(hits)}"] if hits else []
+        if name == "morning" and len(text.split()) > 220:
+            problems.append(f"morning brief is {len(text.split())} words")
+        rows.append(("to Aaron", name, problems))
+    return rows
+
+
+JUDGE = """You grade messages from a GTM system for a founder selling event vendor software. Be strict.
+For a PROSPECT message, check: (1) sounds like a real person, not a template; (2) the first line is about the reader's
+world; (3) one clear, easy ask; (4) a credible reason to reply now; (5) nothing a busy events person would roll their eyes at.
+For a message TO THE FOUNDER, check: (1) leads with the most important thing; (2) gives a recommendation with a reason,
+not just a list; (3) uses names, no internal jargon; (4) reads like a sharp colleague's text.
+Reply with PASS, or FAIL followed by the single biggest problem in one sentence."""
+
+
+def judge_rows():
+    """--llm: a Claude grader for whether things sound human and strategic. Slow, costs tokens."""
+    from pebble_gtm import commands, llm
+    rows = []
+    conn = _seeded()
+    samples = {"morning brief (to founder)": commands.dispatch(conn, "morning")}
+    for d in conn.execute("SELECT id, body, purpose FROM drafts WHERE status = 'draft' ORDER BY id LIMIT 4"):
+        samples[f"draft #{d['id']} {d['purpose']} (to prospect)"] = d["body"]
+    for name, text in samples.items():
+        verdict, _ = llm.run_agent(JUDGE, [{"role": "user", "content": f"{name}:\n\n{text}"}], [], {}, effort="medium",
+                                   max_steps=1)
+        rows.append(("judge", name, [] if verdict.strip().upper().startswith("PASS") else [verdict.strip()[:160]]))
+    return rows
+
+
 def main(use_llm):
     today = date.fromisoformat(TODAY)
     rows, failed = [], 0
@@ -147,8 +283,11 @@ def main(use_llm):
     rows.append(("after intro", venue["name"], checks.draft_problems(text, venue, venue_brief)))
 
     rows += integration_rows()
+    rows += instagram_rows()
+    rows += voice_rows()
     if use_llm:
         rows += live_agent_rows(today)
+        rows += judge_rows()
 
     print(f"{'':6} {'kind':13} case")
     for kind, name, problems in rows:

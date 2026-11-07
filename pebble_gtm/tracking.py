@@ -57,8 +57,8 @@ def refresh_stage(conn, org_id):
         stage = "signed_up"
     elif current in MANUAL:
         stage = current
-    elif any(d["reply_kind"] == "negative" for d in outreach):
-        stage = "lost"
+    elif outreach and outreach[-1]["reply_kind"] == "negative":
+        stage = "lost"          # a later revisit that goes out reopens the thread
     elif outreach and outreach[-1]["replied_at"]:
         stage = "replied"
     elif any(d["status"] in ("draft", "approved") for d in drafts):

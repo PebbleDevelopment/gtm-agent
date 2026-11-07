@@ -22,7 +22,7 @@ from datetime import date, timedelta
 from email.policy import default as default_policy
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 
-from . import db, llm, tracking
+from . import db, llm, playbook, tracking
 
 FREE_MAIL = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com", "icloud.com", "me.com", "live.com",
              "msn.com", "comcast.net", "att.net", "proton.me", "protonmail.com"}
@@ -157,7 +157,7 @@ def handle_inbox_message(conn, msg):
     last = conn.execute("""SELECT * FROM drafts WHERE (org_id = ? OR via_org_id = ?) AND status = 'sent'
                            ORDER BY sent_at DESC, id DESC LIMIT 1""", (org["id"], org["id"])).fetchone()
     if last is None:
-        return f"📩 Email from {sender} at *{org['name']}* (we haven't written to them): \"{subject}\""
+        return f"📩 {sender} at {org['name']} emailed you (\"{subject}\"). You haven't written to them yet, so it might be inbound."
     when = parsedate_to_datetime(msg["Date"]).date().isoformat() if msg["Date"] else db.today().isoformat()
     if when < last["sent_at"][:10] or (last["replied_at"] and last["replied_at"] >= when):
         return None
@@ -169,7 +169,28 @@ def handle_inbox_message(conn, msg):
     if logged is None:
         return None
     stage, thread_org = logged
-    return f"↩ *{org['name']}* replied ({kind}): \"{snippet}\". Stage: {stage}. *draft {thread_org}* writes what's next."
+    return reply_note(conn, org, kind, snippet, thread_org)
+
+
+def reply_note(conn, org, kind, snippet, thread_org):
+    """Tell Aaron about a reply the way a teammate would, with the answer already drafted."""
+    from . import commands, draft
+    name = playbook.who(org)
+    objection = playbook.detect_objection(snippet)
+    about = "" if thread_org == org["id"] else f" about the intro to {db.find_org(conn, thread_org)['name']}"
+    if kind == "positive":
+        head = f"{name} wrote back{about}, and it's a yes: \"{snippet}\""
+    elif kind == "neutral":
+        what = {"price": "asked about price", "how_it_works": "asked how it works", "not_decider": "needs to loop someone in",
+                "existing_tool": "mentioned their current setup", "timing": "said the timing's tricky"}.get(objection, "replied with a question")
+        head = f"{name} {what}{about}: \"{snippet}\""
+    else:
+        rule = playbook.OBJECTIONS.get(objection or "", {})
+        later = (f" Sounds like 'not now' rather than 'no', so I'll bring it back in about {rule['revisit_days']} days."
+                 if rule.get("revisit_days") and objection in ("timing", "existing_tool") else " I'll close it out.")
+        return f"{name} passed{about}: \"{snippet}\".{later}"
+    d, _ = draft.run(conn, thread_org)
+    return head + ("\n\n" + commands._show_new(d) if d else "")
 
 
 def match_sent(conn, msg):
@@ -177,14 +198,15 @@ def match_sent(conn, msg):
     to = {a.lower() for _, a in getaddresses(msg.get_all("To", []) + msg.get_all("Cc", []))}
     when = parsedate_to_datetime(msg["Date"]).isoformat(timespec="seconds") if msg["Date"] else db.now()
     out = []
-    for d in conn.execute("""SELECT d.*, COALESCE(v.email, o.email) AS rcpt, o.name FROM drafts d
+    for d in conn.execute("""SELECT d.*, COALESCE(v.email, o.email) AS rcpt, COALESCE(v.name, o.name) AS name FROM drafts d
                              JOIN orgs o ON o.id = d.org_id LEFT JOIN orgs v ON v.id = d.via_org_id
                              WHERE d.status = 'approved'""").fetchall():
         if d["rcpt"] and d["rcpt"].lower() in to and when[:19] >= (d["approved_at"] or "")[:19]:
             conn.execute("UPDATE drafts SET status = 'sent', sent_at = ? WHERE id = ?", (when[:10], d["id"]))
             db.log(conn, "gmail", "sent", d["org_id"], f"#{d['id']}")
             tracking.refresh_stage(conn, d["org_id"])
-            out.append(f"✓ Saw you sent #{d['id']} to {d['rcpt']} ({d['name']}). Logged.")
+            who = conn.execute("SELECT decision_maker FROM orgs WHERE id = ?", (d["via_org_id"] or d["org_id"],)).fetchone()[0]
+            out.append(f"Saw your note to {playbook.first(who)} at {d['name']} go out. Logged it, and I'll watch for a reply.")
     return out
 
 
@@ -201,6 +223,30 @@ def _fetch(imap, folder, since):
         _, parts = imap.uid("fetch", uid, "(BODY.PEEK[])")     # PEEK: don't mark as read
         if parts and parts[0]:
             yield email.message_from_bytes(parts[0][1], policy=default_policy)
+
+
+def test():
+    """Log in and count recent mail in both folders. Reads nothing, records nothing."""
+    if not configured():
+        return "Set GMAIL_ADDRESS and GMAIL_APP_PASSWORD in .env first."
+    imap = imaplib.IMAP4_SSL("imap.gmail.com")
+    try:
+        imap.login(os.environ["GMAIL_ADDRESS"], os.environ["GMAIL_APP_PASSWORD"])
+    except imaplib.IMAP4.error as e:
+        return (f"Gmail refused the login ({e}). Check the app password, that 2-Step Verification is on, "
+                "and that IMAP isn't disabled by your Workspace admin.")
+    out = [f"Logged in as {os.environ['GMAIL_ADDRESS']}."]
+    since = db.today() - timedelta(days=LOOKBACK_DAYS)
+    for folder in ("INBOX", os.environ.get("GMAIL_SENT_FOLDER", "[Gmail]/Sent Mail")):
+        status, _ = imap.select(f'"{folder}"', readonly=True)
+        if status != "OK":
+            out.append(f"Couldn't open {folder}. If your Gmail isn't in English, set GMAIL_SENT_FOLDER.")
+            continue
+        _, data = imap.uid("search", None, f"(SINCE {since:%d-%b-%Y})")
+        out.append(f"{folder}: {len(data[0].split())} messages in the last {LOOKBACK_DAYS} days.")
+    imap.logout()
+    out.append("Nothing was read or recorded. The real check runs with `inbox` or inside `serve`.")
+    return "\n".join(out)
 
 
 def check(conn):

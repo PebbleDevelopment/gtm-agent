@@ -38,6 +38,7 @@ TOOLS = [
         "segment": {"type": "string", "enum": ["multi_festival", "venue", "tourism", "chamber", "econ_dev"]},
         "city": {"type": "string"}, "state": {"type": "string", "description": "2-letter state"},
         "website": {"type": "string"},
+        "instagram": {"type": "string", "description": "their Instagram handle, if their site or a post shows it"},
         "events_per_year": {"type": "integer"},
         "flagship_event": {"type": "string"},
         "decision_maker": {"type": "string"}, "decision_maker_title": {"type": "string"},
@@ -85,6 +86,9 @@ def run(conn, query=None, limit=5):
             return f"Limit of {limit} reached. Stop and summarize."
         if db.find_org(conn, name):
             return f"{name} is already in the pipeline. Skip it."
+        if "instagram" in fields:
+            from . import instagram
+            fields["instagram"] = instagram.handle(fields["instagram"])
         org_id = db.add_org(conn, dict(fields, name=name, segment=segment, city=city, state=state),
                             source=f"prospect: {query}", source_url=source_url)
         if signal_date and signal_kind and signal_detail:

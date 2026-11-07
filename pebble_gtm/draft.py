@@ -18,8 +18,9 @@ trigger up front, exactly one question, no numbers the brief doesn't support, no
 """
 
 import json
+from datetime import date
 
-from . import checks, db, llm, research
+from . import checks, db, llm, playbook, research
 
 ASK = {
     "vendor_apps_open": "Open to a 15-minute walkthrough before the applications pile up?",
@@ -53,8 +54,36 @@ def value_line(org):
 
 # ---- Rules-based drafts: the fallback, the agent's starting point, and what the evals check offline ----
 
-def compose(org, trigger, touch, reply_kind=None, extra_signal=None, intro_from=None):
+def compose_objection(org, objection):
+    """Answers to pushback, from the playbook. One question each, and each makes the next step smaller."""
+    hi, ev = f"Hi {first_name(org)},", org["flagship_event"]
+    if objection == "existing_tool":
+        return (f"{hi}\n\nTotally fair, and switching mid-season is a pain. When does your current setup renew? "
+                f"If it helps, I can run {ev} on Pebble alongside it so you can compare with real vendors.\n\nAaron")
+    if objection == "timing":
+        return (f"{hi}\n\nMakes sense, this is your busy stretch. When do you start planning vendors for next season? "
+                f"I'll check back right before then, and I'm happy to have {ev} set up so it's ready if you want it.\n\nAaron")
+    if objection == "not_decider":
+        return (f"{hi}\n\nThanks for taking a look. Who else should see this? I can send a short summary you can "
+                f"forward, covering what it would change for {ev} and what it costs.\n\nAaron")
+    if objection == "how_it_works":
+        return (f"{hi}\n\nGood question, and it's easier to show than explain. Want me to set up {ev} with a few of "
+                f"your past vendors so you can click through it yourself?\n\nAaron")
+    return None
+
+
+def compose_revisit(org, objection):
+    hi, ev = f"Hi {first_name(org)},", org["flagship_event"]
+    why = {"existing_tool": "you were locked into your current setup", "timing": "the timing wasn't right"}.get(
+        objection, "it wasn't the right moment")
+    return (f"{hi}\n\nComing back to this as promised. When we last talked, {why}. With planning for {ev} coming up, "
+            f"would it help to have it set up on Pebble so you can try it with your own vendors?\n\nAaron")
+
+
+def compose(org, trigger, touch, reply_kind=None, extra_signal=None, intro_from=None, objection=None):
     hi = f"Hi {first_name(org)},"
+    if reply_kind == "neutral" and objection and objection != "price":
+        return compose_objection(org, objection)
     if reply_kind == "positive":
         return (f"{hi}\n\nThanks, glad the timing works. Does Tuesday or Wednesday afternoon work for 20 minutes? "
                 f"I'll have {org['flagship_event']} set up so it's your vendors on screen, not a demo account.\n\nAaron")
@@ -106,48 +135,72 @@ def compose_referral_ask(org):
 
 WRITER = """You write short messages for Aaron, founder of Pebble (an AI platform that runs a festival's or market's whole
 vendor ecosystem: applications, approvals, booths, payments, vendor messages, live sales data, plus ticketing).
-Aaron writes like a founder texting a peer: plain, warm, specific, no marketing language.
+Think like a GTM lead who has sold to event organizers, venues and civic groups for years, and write like Aaron:
+a founder who knows events, writing to a peer. Plain, warm, specific, human.
 
-You get a starting draft, the brief, the thread so far, Aaron's past edits and his stated preferences. Write the
-message he'd actually send. Learn from his edits: they show what he cuts and how he phrases things.
-Process: write it, call check_draft, fix every problem it reports, and when it passes call save_draft. Then stop.
+How good outreach works here:
+""" + playbook.PROSPECT_PRINCIPLES + """
+
+You get the reader's persona (who they are, what they care about, what to lead with, what to avoid), the brief,
+the thread so far, any pushback and the expert move for it, Aaron's own writing samples, his past edits and his
+preferences, plus a rules-based starting draft. Don't polish the starting draft; write the message an expert would
+send. His samples and edits show how he actually writes: match them over any default style.
+Process: write it, call check_draft, fix every problem it reports, then call save_draft with the text and a one-line
+rationale for Aaron (the angle and why it fits this person right now). Then stop.
 Hard rules: under 90 words; open "Hi <first name>,"; end with "Aaron" on its own line; exactly one question mark;
 keep the specific trigger; no number that isn't in the brief or starting draft; never invent customers, stats or results."""
 
 
-def write_with_claude(conn, recipient, baseline, brief_body, purpose, thread, instructions=None):
+def write_with_claude(conn, recipient, baseline, brief_body, purpose, thread, instructions=None, objection=None):
     edits = [json.loads(e) for e in db.recall(conn, "voice_edit", 5)]
     prefs = db.recall(conn, "preference", 10)
+    samples = db.recall(conn, "voice_sample", 3)
     saved = {}
 
     def check_draft(text):
         problems = checks.draft_problems(text, recipient, brief_body + "\n" + baseline)
         return "passes" if not problems else "Fix: " + "; ".join(problems)
 
-    def save_draft(text):
+    def save_draft(text, rationale=""):
         problems = checks.draft_problems(text, recipient, brief_body + "\n" + baseline)
         if problems:
             raise ValueError("Not saved. Fix: " + "; ".join(problems))
-        saved["text"] = text.strip()
+        saved["text"], saved["rationale"] = text.strip(), rationale.strip()
         return "saved"
 
     context = {
         "purpose": purpose, "to": f"{recipient['decision_maker']}, {recipient['decision_maker_title']} at {recipient['name']}",
+        "reader_persona": playbook.persona(recipient["segment"]),
+        "pushback": {"type": objection, "expert_move": playbook.OBJECTIONS[objection]["move"]} if objection else None,
         "starting_draft": baseline, "brief": brief_body, "thread_so_far": thread,
+        "aarons_writing_samples": samples,
         "aarons_edits": [{"he_got": e["before"], "he_sent": e["after"]} for e in edits],
         "aarons_preferences": prefs, "instructions_from_aaron": instructions,
     }
     tools = [llm.tool("check_draft", "Run the voice and accuracy checks.", {"text": {"type": "string"}}, ["text"]),
-             llm.tool("save_draft", "Save the final draft. Rejected if checks fail.", {"text": {"type": "string"}}, ["text"])]
+             llm.tool("save_draft", "Save the final draft. Rejected if checks fail.",
+                      {"text": {"type": "string"}, "rationale": {"type": "string"}}, ["text", "rationale"])]
     llm.run_agent(WRITER, [{"role": "user", "content": json.dumps(context, indent=1)}], tools,
                   {"check_draft": check_draft, "save_draft": save_draft}, effort="high", max_steps=8)
-    return saved.get("text")
+    return saved if saved.get("text") else None
+
+
+def last_objection(conn, org_id):
+    note = conn.execute("""SELECT detail FROM activity WHERE org_id = ? AND action = 'reply'
+                           ORDER BY id DESC LIMIT 1""", (org_id,)).fetchone()
+    return playbook.detect_objection(note["detail"]) if note else None
 
 
 def _thread(conn, org_id):
-    return [{"touch": d["touch"], "purpose": d["purpose"], "sent": d["sent_at"], "body": d["body"],
-             "reply": d["reply_kind"]}
-            for d in conn.execute("SELECT * FROM drafts WHERE org_id = ? AND status = 'sent' ORDER BY id", (org_id,))]
+    """The conversation so far, including what they actually said back, so the next message answers it."""
+    said = [r["detail"].split(": ", 1)[-1] for r in conn.execute(
+        "SELECT detail FROM activity WHERE org_id = ? AND action = 'reply' ORDER BY id", (org_id,))]
+    out = []
+    for d in conn.execute("SELECT * FROM drafts WHERE org_id = ? AND status = 'sent' ORDER BY id", (org_id,)):
+        out.append({"we_sent": d["body"], "on": d["sent_at"], "they_replied": d["reply_kind"]})
+    for item, text in zip([o for o in out if o["they_replied"]], said):
+        item["their_words"] = text
+    return out
 
 
 def run(conn, org_id, force=False, instructions=None, use_llm=None, intro=False):
@@ -158,15 +211,19 @@ def run(conn, org_id, force=False, instructions=None, use_llm=None, intro=False)
     if pending:
         return None, f"Draft #{pending['id']} is still waiting on you. Approve, edit or discard it first."
     stage = conn.execute("SELECT stage FROM pipeline WHERE org_id = ?", (org_id,)).fetchone()["stage"]
-    if stage == "lost":
-        return None, f"{org['name']} said no. Nothing to draft."
+    objection = last_objection(conn, org_id)
+    revisit = stage == "lost" and objection in ("existing_tool", "timing")
+    if stage == "lost" and not revisit:
+        return None, f"{org['name']} said no, so there's nothing to send."
 
     brief = research.latest_brief(conn, org_id)
     sent = conn.execute("""SELECT * FROM drafts WHERE org_id = ? AND status = 'sent' AND via_org_id IS NULL
                            AND purpose IN ('outreach','reply') ORDER BY id""", (org_id,)).fetchall()
-    recipient, via, trigger, touch = org, None, None, 0
+    recipient, via, trigger, touch, intro_ok = org, None, None, 0, None
 
-    if stage in ("signed_up", "onboarding"):
+    if revisit:
+        purpose, touch, baseline = "outreach", 1, compose_revisit(org, objection)
+    elif stage in ("signed_up", "onboarding"):
         m = tracking.milestones(conn, org_id)
         nxt = next(x for x in db.MILESTONES if x not in m)
         purpose, baseline = "activation", compose_activation(org, nxt)
@@ -204,28 +261,47 @@ def run(conn, org_id, force=False, instructions=None, use_llm=None, intro=False)
             extra = conn.execute("SELECT * FROM signals WHERE org_id = ? AND seen_on > ? ORDER BY seen_on DESC LIMIT 1",
                                  (org_id, sent[-1]["sent_at"])).fetchone()
         purpose = "reply" if reply_kind else "outreach"
-        baseline = compose(org, trigger, touch, reply_kind, extra, intro_from=intro_ok if touch == 1 else None)
+        if reply_kind != "neutral":
+            objection = None
+        baseline = compose(org, trigger, touch, reply_kind, extra, intro_from=intro_ok if touch == 1 else None,
+                           objection=objection)
 
+    rationale = playbook.angle(org, purpose, trigger=trigger, objection=objection if purpose == "reply" else None,
+                               intro_from=intro_ok if purpose == "outreach" and touch == 1 else None, touch=touch)
+    if revisit:
+        last = conn.execute("SELECT MAX(COALESCE(replied_at, sent_at)) FROM drafts WHERE org_id = ? AND status = 'sent'",
+                            (org_id,)).fetchone()[0]
+        waited, due = (db.today() - date.fromisoformat(last[:10])).days, playbook.OBJECTIONS[objection]["revisit_days"]
+        reason = {"existing_tool": "they were locked into another tool", "timing": "the timing wasn't right"}[objection]
+        rationale = (f"They said not now ({reason}) {waited} days ago, so it's a good time to check back." if waited >= due else
+                     f"They said not now ({reason}) only {waited} days ago. I'd hold this until about day {due} so it doesn't feel pushy.")
     brief_body = brief["body"] if brief else ""
     body, note = baseline, "rules"
     if use_llm if use_llm is not None else llm.available():
         try:
-            written = write_with_claude(conn, recipient, baseline, brief_body, purpose, _thread(conn, org_id), instructions)
-            body, note = (written, "written by Claude, passed checks") if written else (baseline, "Claude's draft failed checks; rules version")
+            written = write_with_claude(conn, recipient, baseline, brief_body, purpose, _thread(conn, org_id),
+                                        instructions, objection=objection if purpose == "reply" else None)
+            if written:
+                body, note = written["text"], "Claude"
+                rationale = written["rationale"] or rationale
+            else:
+                note = "Claude's version failed the checks, so this is the rules version"
         except Exception as e:      # no key, network down: the rules draft still works
             note = f"rules (Claude unavailable: {type(e).__name__})"
 
     draft_id = conn.execute(
-        """INSERT INTO drafts (org_id, via_org_id, brief_id, touch, purpose, body, status, created_at)
-           VALUES (?,?,?,?,?,?, 'draft', ?)""",
-        (org_id, via["id"] if via else None, brief["id"] if brief else None, touch, purpose, body, db.now())).lastrowid
+        """INSERT INTO drafts (org_id, via_org_id, brief_id, touch, purpose, body, rationale, status, created_at)
+           VALUES (?,?,?,?,?,?,?, 'draft', ?)""",
+        (org_id, via["id"] if via else None, brief["id"] if brief else None, touch, purpose, body, rationale,
+         db.now())).lastrowid
     db.log(conn, "draft", "draft", org_id, f"#{draft_id} {purpose} touch {touch} ({note})")
     tracking.refresh_stage(conn, org_id)
     tracking.set_next(conn, org_id, f"Approve draft #{draft_id}", db.today().isoformat())
     conn.commit()
     d = dict(conn.execute("SELECT * FROM drafts WHERE id = ?", (draft_id,)).fetchone())
-    status = "" if recipient["email_status"] == "valid" or not recipient["email"] else f", {recipient['email_status']}"
-    d["to"] = f"{recipient['decision_maker']} <{recipient['email'] or 'no email yet'}{status}> at {recipient['name']}"
+    d["to"] = playbook.who(recipient)
+    d["email"] = recipient["email"]
+    d["email_status"] = recipient["email_status"]
     return d, note
 
 

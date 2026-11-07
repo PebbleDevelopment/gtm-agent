@@ -9,14 +9,17 @@ Approving and marking sent only ever happen here, from Aaron's own words. No age
 import json
 import re
 
-from . import db, draft, followup, llm, prospect, research, tracking
+from . import db, draft, followup, llm, playbook, prospect, research, tracking
 
-HELP = """*Pebble GTM*. Just text me normally, e.g. "find venues near Chattanooga" or "Dana replied, wants a call".
-Shortcuts:
+HELP = """Just text me like you'd text a teammate: "find venues near Chattanooga", "Dana replied, she wants Tuesday",
+"what should I do today?". I'll handle the rest.
+
+If you want to be quick about it, these shortcuts skip straight to the action:
 *today*: what to do next, with reasons · *morning*: run the daily pass now
 *pipeline* · *orgs* · *metrics*
 *prospect* [where]: find new orgs that fit · *enrich* <org>: Clay finds the decider's email
 *inbox*: check Gmail for replies and sends now
+*ig*: check Instagram now · *ig* <org> @handle: watch an org's posts
 *research* <org> [web] · *brief* <org>
 *draft* <org> [force] · *intro* <org>: ask a live customer to introduce you
 *show* <#> · *ok* <#> (approve) · *edit* <#> <text> · *discard* <#>
@@ -25,8 +28,9 @@ Shortcuts:
 *milestone* <org> signed_up|event_created|apps_open|first_payment
 *meeting* / *lost* <org> [note] · *signal* <org> <kind> <detail>
 *add* name | segment | city, ST | events/yr | flagship | decider | title
+*voice* <paste an email you wrote>: so I write more like you
 
-Nothing is ever sent to anyone. Approved drafts come back here for you to send."""
+I never send anything. When you approve a draft, I hand you the text to send yourself."""
 
 KINDS = ", ".join(research.SIGNAL_WEIGHT)
 APPROVE = re.compile(r"^(ok|okay|approve|approved|yes|y|👍|✅)\s*#?(\d+)$", re.IGNORECASE)
@@ -91,17 +95,29 @@ def dispatch(conn, text):
     return reply
 
 
+BUCKET_WORDS = {"replied": "They wrote back", "waiting on you": "Waiting on your OK", "activation": "Customers to move forward",
+                "un-replied": "Quiet threads", "cold": "Worth another look", "new": "New leads"}
+
+
 def cmd_today(conn, rest):
     props = followup.run(conn)
     if not props:
-        return "Nothing due today."
-    out, bucket = ["*Today*"], None
+        return "Nothing needs you today. Want me to go find a few more venues or chambers?"
+    out, bucket = [], None
+    unresearched = [p for p in props if p["kind"] == "research"]
+    if len(unresearched) > 3:
+        props = [p for p in props if p["kind"] != "research"]
     for p in props:
         if p["bucket"] != bucket:
             bucket = p["bucket"]
-            out.append(f"\n_{bucket}_")
-        out.append(f"• *{p['org']}* (#{p['org_id']}): {p['action']}\n  why: {p['reason']}")
-    return "\n".join(out)
+            out.append(f"\n*{BUCKET_WORDS[bucket]}*")
+        org = db.find_org(conn, p["org_id"])
+        out.append(f"• {playbook.who(org)}: {p['action']} ({p['reason']})")
+    if len(unresearched) > 3:
+        names = ", ".join(p["org"] for p in unresearched[:-1]) + " and " + unresearched[-1]["org"]
+        out.append(f"\n*New leads*\n{len(unresearched)} I haven't looked into yet: {names}. "
+                   "The morning pass will get to them, or say *research <name>*.")
+    return "\n".join(out).strip()
 
 
 def cmd_morning(conn, rest):
@@ -146,12 +162,47 @@ def cmd_inbox(conn, rest):
     return "\n".join(notes) if notes else "Nothing new in Gmail from anyone in the pipeline."
 
 
+def cmd_ig(conn, rest):
+    """'ig riverlight @riverlightfest' saves a handle; bare 'ig' checks Instagram now."""
+    from . import instagram
+    if rest.strip():
+        org, words = _org_then_words(conn, rest)
+        h = instagram.handle(" ".join(words))
+        if not h:
+            raise ValueError("Send it like *ig riverlight @riverlightfest*.")
+        conn.execute("UPDATE orgs SET instagram = ? WHERE id = ?", (h, org["id"]))
+        conn.commit()
+        return f"Saved @{h} for {org['name']}. I'll read their posts each morning for anything worth writing about."
+    if not instagram.configured():
+        return "Instagram isn't connected yet (IG_USER_ID and IG_ACCESS_TOKEN in .env). The README has the steps."
+    news = instagram.watch(conn)
+    posts, added = instagram.discover(conn)
+    out = [n["note"] for n in news] or ["Nothing new from the organizers I'm watching."]
+    if added:
+        out.append("From hashtag vendor calls I added " + ", ".join(f"{n} (#{i})" for i, n, _ in added) + ".")
+    elif posts:
+        out.append(f"Saw {len(posts)} new vendor call{'s' if len(posts) != 1 else ''} under the hashtags"
+                   + (", but none were organizers that fit." if llm.available() else ". Working out who posted them needs Claude."))
+    return "\n".join(out)
+
+
 def cmd_research(conn, rest):
     ref, flag = _split_flag(rest, {"web"})
     org = _org(conn, ref)
     brief = research.run(conn, org["id"], web=flag == "web")
     note = f"\n\n_{brief['agent_note']}_" if brief.get("agent_note") else ""
-    return brief["body"] + note + (f"\n\nNext: *draft {org['id']}*" if brief["why_now"] else "")
+    warm = research.warm_path(conn, org)
+    if warm:
+        nxt = f"I'd ask {playbook.who(warm)} for an intro before writing to them cold (*intro {org['id']}*)."
+    elif brief["why_now"] and org["email"]:
+        nxt = f"Good reason to reach out now. Want me to write the first note? (*draft {org['id']}*)"
+    elif brief["why_now"]:
+        nxt = f"Good reason to reach out now, but I need an email first (*enrich {org['id']}*)."
+    elif brief["fit_score"] < 50:
+        nxt = "Not a fit for Pebble right now, so I'd skip them."
+    else:
+        nxt = "Good fit, but there's no reason to reach out yet. I'll flag them when there's news."
+    return brief["body"] + note + "\n\n" + nxt
 
 
 def cmd_brief(conn, rest):
@@ -162,9 +213,19 @@ def cmd_brief(conn, rest):
     return b["body"]
 
 
-def _show_new(d, note):
-    return (f"*Draft #{d['id']}* to {d['to']} ({d['purpose']}, {note})\n\n{d['body']}\n\n"
-            f"*ok {d['id']}* · *edit {d['id']} <new text>* · *discard {d['id']}*")
+def _email_note(email, status):
+    if not email:
+        return "I don't have their email yet, so say *enrich* and Clay will look."
+    return {"invalid": f"Heads up: {email} bounced before.", "risky": f"Clay marked {email} as risky.",
+            "unknown": f"Goes to {email} (not verified yet)."}.get(status, f"Goes to {email}.")
+
+
+def _show_new(d, note=None):
+    kind = playbook.PURPOSE_WORDS.get(d["purpose"], "note")
+    why = f"\n_{d['rationale']}_" if d.get("rationale") else ""
+    article = "an" if kind[0] in "aeiou" else "a"
+    return (f"Here's {article} {kind} for {d['to']}.{why}\n\n{d['body']}\n\n{_email_note(d.get('email'), d.get('email_status'))} "
+            f"*ok {d['id']}* to approve, or *edit {d['id']}* with your version.")
 
 
 def cmd_draft(conn, rest):
@@ -182,13 +243,17 @@ def cmd_intro(conn, rest):
 
 def cmd_show(conn, rest):
     d = _draft_row(conn, rest)
-    return f"*Draft #{d['id']}* to {d['name']} [{d['status']}]\n\n{d['body']}"
+    rcpt = db.find_org(conn, d["via_org_id"] or d["org_id"])
+    status = {"draft": f"*ok {d['id']}* to approve.", "approved": "Approved, waiting for you to send it.",
+              "sent": "Already sent.", "discarded": "Discarded."}[d["status"]]
+    why = f"\n_{d['rationale']}_" if d["rationale"] else ""
+    return f"To {playbook.who(rcpt)}:{why}\n\n{d['body']}\n\n{status}"
 
 
 def cmd_approve(conn, rest):
     d = _draft_row(conn, rest)
     if d["status"] != "draft":
-        return f"Draft #{d['id']} is already {d['status']}."
+        return f"That one's already {d['status']}."
     conn.execute("UPDATE drafts SET status = 'approved', approved_at = ? WHERE id = ?", (db.now(), d["id"]))
     tracking.set_next(conn, d["org_id"], f"Send approved draft #{d['id']} yourself", db.today().isoformat())
     db.log(conn, "aaron", "approve", d["org_id"], f"#{d['id']}")
@@ -196,8 +261,10 @@ def cmd_approve(conn, rest):
     rcpt = conn.execute("SELECT email, email_status FROM orgs WHERE id = ?", (d["via_org_id"] or d["org_id"],)).fetchone()
     warn = {"invalid": " ⚠ this address bounced before", "risky": " (Clay says risky)", "unknown": " (not verified)"}
     to = f"{rcpt['email']}{warn.get(rcpt['email_status'], '')}" if rcpt["email"] else f"{d['name']} (no email yet: *enrich {d['org_id']}*)"
-    return (f"Approved #{d['id']}. Nothing has been sent. Copy this to {to} yourself, "
-            f"then reply *sent {d['id']}* (or just send it; Gmail check logs it):\n\n{d['body']}")
+    from . import gmail
+    after = ("Send it from Gmail and I'll notice and log it." if gmail.configured()
+             else f"Send it, then tell me *sent {d['id']}*.")
+    return f"Approved. Nothing's gone out. Here's the text for {to}:\n\n{d['body']}\n\n{after}"
 
 
 def cmd_edit(conn, rest):
@@ -209,7 +276,7 @@ def cmd_edit(conn, rest):
     db.remember(conn, "voice_edit", json.dumps({"before": d["body"], "after": body.strip()}))   # the draft agent learns from this
     db.log(conn, "aaron", "edit", d["org_id"], f"#{d['id']}")
     conn.commit()
-    return f"Updated #{d['id']}. I'll write closer to this next time. *ok {d['id']}* when ready."
+    return f"Saved your version, and I'll write more like it from now on. *ok {d['id']}* when you're ready."
 
 
 def cmd_discard(conn, rest):
@@ -226,10 +293,11 @@ def cmd_sent(conn, rest):
         return f"Draft #{d['id']} is {d['status']}. Only approved drafts can be marked sent."
     conn.execute("UPDATE drafts SET status = 'sent', sent_at = ? WHERE id = ?", (db.today().isoformat(), d["id"]))
     db.log(conn, "aaron", "sent", d["org_id"], f"#{d['id']}")
-    stage = tracking.refresh_stage(conn, d["org_id"])
+    tracking.refresh_stage(conn, d["org_id"])
     followup.run(conn)
     conn.commit()
-    return f"Logged #{d['id']} as sent. Stage: *{stage}*."
+    rcpt = db.find_org(conn, d["via_org_id"] or d["org_id"])
+    return f"Got it, logged. I'll keep an eye out for {playbook.first(rcpt['decision_maker'])}'s reply."
 
 
 def cmd_replied(conn, rest):
@@ -244,7 +312,9 @@ def cmd_replied(conn, rest):
     stage, thread_org = logged
     followup.run(conn)
     about = "" if thread_org == org["id"] else f" (about {db.find_org(conn, thread_org)['name']})"
-    return f"Logged reply from {org['name']}{about}. Stage: *{stage}*. *draft {thread_org}* writes what's next."
+    nxt = {"replied": f"Say *draft {thread_org}* and I'll write the answer.", "lost": "I'll close it out, and if it was a "
+           "'not now' I'll remind you when it's time to check back."}.get(stage, "")
+    return f"Noted{about}. {nxt}".strip()
 
 
 def cmd_milestone(conn, rest):
@@ -293,11 +363,21 @@ def cmd_add(conn, rest):
     return f"Added #{org_id} {f[0]}. Next: *research {org_id} web*."
 
 
+def cmd_voice(conn, rest):
+    if len(rest.split()) < 15:
+        return "Paste a real email or message you wrote (a few sentences at least) after *voice*, and I'll write more like it."
+    db.remember(conn, "voice_sample", rest.strip())
+    conn.commit()
+    n = len(db.recall(conn, "voice_sample", 50))
+    return f"Thanks. That's {n} sample{'s' if n != 1 else ''} of how you write. Two or three is plenty."
+
+
 def cmd_metrics(conn, rest):
     f = tracking.funnel(conn)
-    from . import clay
+    from . import clay, instagram
     p = prospect.metric(conn)
     cv, ca = clay.metric(conn)
+    igf, igc = instagram.metric(conn)
     with_t, without_t = research.metric(conn).values()
     clean, approved = draft.metric(conn)
     by_touch = followup.metric(conn)
@@ -307,7 +387,8 @@ def cmd_metrics(conn, rest):
         f"*Funnel*: {f['contacted']} contacted → {f['replied']} replied → {f['signed_up']} signed up → "
         f"{f['onboarding']} onboarding+ → *{f['live']} live*",
         f"*Prospect*: {p['found']} found by the agent → {p['contacted']} contacted → {p['replied']} replied → "
-        f"{p['signed_up']} signed up · Clay: {cv}/{ca} sent came back with a valid email",
+        f"{p['signed_up']} signed up · Clay: {cv}/{ca} sent came back with a valid email · "
+        f"Instagram: news from {igf} org{'s' if igf != 1 else ''}, {igc} contacted",
         f"*Research*: briefs that led to a reply: with a why-now trigger {with_t[0]}/{with_t[1]} ({pct(*with_t)}) "
         f"vs without {without_t[0]}/{without_t[1]} ({pct(*without_t)})",
         f"*Draft*: approved without edits {clean}/{approved} ({pct(clean, approved)})",
@@ -319,9 +400,9 @@ def cmd_metrics(conn, rest):
 
 HANDLERS = {
     "help": lambda c, r: HELP, "today": cmd_today, "next": cmd_today, "morning": cmd_morning,
-    "pipeline": cmd_pipeline, "orgs": cmd_orgs, "prospect": cmd_prospect, "enrich": cmd_enrich, "inbox": cmd_inbox, "research": cmd_research,
+    "pipeline": cmd_pipeline, "orgs": cmd_orgs, "prospect": cmd_prospect, "enrich": cmd_enrich, "inbox": cmd_inbox, "ig": cmd_ig, "research": cmd_research,
     "brief": cmd_brief, "draft": cmd_draft, "intro": cmd_intro, "show": cmd_show, "approve": cmd_approve,
     "edit": cmd_edit, "discard": cmd_discard, "sent": cmd_sent, "replied": cmd_replied, "milestone": cmd_milestone,
     "meeting": _manual_stage("meeting"), "lost": _manual_stage("lost"),
-    "signal": cmd_signal, "add": cmd_add, "metrics": cmd_metrics,
+    "signal": cmd_signal, "add": cmd_add, "metrics": cmd_metrics, "voice": cmd_voice,
 }

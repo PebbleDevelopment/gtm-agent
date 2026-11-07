@@ -4,12 +4,30 @@
   python -m pebble_gtm chat                 type commands as if on WhatsApp
   python -m pebble_gtm serve [--insecure]   run the WhatsApp webhook on :8787
   python -m pebble_gtm morning              run the daily proactive pass now (cron-friendly)
+  python -m pebble_gtm gmail test           check the Gmail login and folders without processing any mail
   python -m pebble_gtm <anything ...>       a shortcut (`today`, `draft 1`) or plain language
 """
 
+import os
 import sys
 
-from . import commands, db, seed, whatsapp
+
+def load_env(path=os.path.join(os.path.dirname(__file__), "..", ".env")):
+    """Read KEY=value lines from .env (gitignored) so secrets live in one local file. Real env vars win."""
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    except FileNotFoundError:
+        pass
+
+
+load_env()
+
+from . import commands, db, seed, whatsapp  # noqa: E402  (after .env so modules see the settings)
 
 
 def main(argv):
@@ -20,6 +38,9 @@ def main(argv):
         conn = db.connect()
         ids = seed.seed(conn)
         print(f"Seeded {len(ids)} synthetic orgs into {db.DB_PATH}. Try: python -m pebble_gtm today")
+    elif argv[:2] == ["gmail", "test"]:
+        from . import gmail
+        print(gmail.test())
     elif argv[0] == "serve":
         port = int(argv[argv.index("--port") + 1]) if "--port" in argv else 8787
         whatsapp.serve(port=port, insecure="--insecure" in argv)

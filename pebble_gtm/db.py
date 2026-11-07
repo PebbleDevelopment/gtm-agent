@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS orgs (
     email TEXT,
     email_status TEXT DEFAULT 'unknown',   -- unknown | valid | risky | invalid (from Clay or a bounce)
     website TEXT,
+    instagram TEXT,                 -- handle without the @
     current_tools TEXT,
     source TEXT DEFAULT 'seed',     -- seed | aaron | prospect agent query that found it
     source_url TEXT,
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS drafts (
     touch INTEGER NOT NULL,         -- 0 = intro ask or activation nudge, 1 = first message, 2+ = follow-ups
     purpose TEXT DEFAULT 'outreach',-- outreach | reply | intro_ask | activation | referral_ask
     body TEXT NOT NULL,
+    rationale TEXT,                 -- one line for Aaron: why this angle
     status TEXT NOT NULL DEFAULT 'draft',   -- draft | approved | sent | discarded
     edited INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,
@@ -88,7 +90,7 @@ CREATE TABLE IF NOT EXISTS milestones (
 CREATE TABLE IF NOT EXISTS memory (
     id INTEGER PRIMARY KEY,
     at TEXT NOT NULL,
-    kind TEXT NOT NULL,             -- preference | voice_edit | fact
+    kind TEXT NOT NULL,             -- preference | voice_edit | voice_sample | fact
     text TEXT NOT NULL
 );
 
@@ -112,7 +114,7 @@ CREATE TABLE IF NOT EXISTS kv (
 CREATE TABLE IF NOT EXISTS activity (
     id INTEGER PRIMARY KEY,
     at TEXT NOT NULL,
-    agent TEXT NOT NULL,            -- prospect | research | draft | followup | tracking | assistant | aaron | pebble | clay | gmail
+    agent TEXT NOT NULL,            -- prospect | research | draft | followup | tracking | assistant | aaron | pebble | clay | gmail | instagram
     action TEXT NOT NULL,
     org_id INTEGER,
     detail TEXT
@@ -127,9 +129,13 @@ def connect(path=None):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
-    # Older stores predate email_status; add it in place.
+    # Older stores predate these columns; add them in place.
     if "email_status" not in [r[1] for r in conn.execute("PRAGMA table_info(orgs)")]:
         conn.execute("ALTER TABLE orgs ADD COLUMN email_status TEXT DEFAULT 'unknown'")
+    if "instagram" not in [r[1] for r in conn.execute("PRAGMA table_info(orgs)")]:
+        conn.execute("ALTER TABLE orgs ADD COLUMN instagram TEXT")
+    if "rationale" not in [r[1] for r in conn.execute("PRAGMA table_info(drafts)")]:
+        conn.execute("ALTER TABLE drafts ADD COLUMN rationale TEXT")
     return conn
 
 
@@ -165,7 +171,7 @@ def find_org(conn, ref):
 
 def add_org(conn, fields, source, source_url=None, synthetic=0):
     cols = ["name", "segment", "city", "state", "events_per_year", "flagship_event", "vendors_per_event",
-            "decision_maker", "decision_maker_title", "email", "website", "current_tools"]
+            "decision_maker", "decision_maker_title", "email", "website", "instagram", "current_tools"]
     vals = [fields.get(c) for c in cols]
     org_id = conn.execute(
         f"INSERT INTO orgs ({', '.join(cols)}, source, source_url, synthetic) VALUES ({', '.join('?' * len(cols))}, ?, ?, ?)",
